@@ -470,7 +470,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="app">
+<div class="app" class:home-view={ready && !needsOnboarding && ui.homeOpen}>
   <Titlebar />
   {#if ready}
     {#if !needsOnboarding}
@@ -535,6 +535,8 @@
 </div>
 
 <style>
+  .home-view :global(.titlebar) { position:absolute; inset:0 0 auto; z-index:10; background:linear-gradient(#06151170,transparent); border-bottom-color:transparent; }
+  .home-view :global(.titlebar .logo), .home-view :global(.titlebar .account), .home-view :global(.titlebar .ctl) { color:#fff; }
   .app {
     height: 100%;
     display: flex;

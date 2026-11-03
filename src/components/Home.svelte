@@ -95,7 +95,7 @@
 </section>
 
 <style>
-  .home { position:relative; isolation:isolate; flex:1; overflow:auto; display:flex; flex-direction:column; padding:32px 44px; color:#fff; background:#17342f; background-image:linear-gradient(180deg,#061b1940,#06151170),url("/home-nature.png"); background-size:cover; background-position:center; }
+  .home { position:relative; isolation:isolate; flex:1; overflow:auto; display:flex; flex-direction:column; padding:72px 44px 32px; color:#fff; background:#17342f; background-image:linear-gradient(180deg,#061b1940,#06151170),url("/home-nature.png"); background-size:cover; background-position:center; }
   .topline { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
   .topline time { font-size:12px; color:#ffffffe0; } .clock { margin-top:8px; font-size:30px; font-weight:350; letter-spacing:-1px; }
   .tools { display:flex; gap:10px; }
@@ -114,6 +114,6 @@
   .sender { font-weight:600; } .subject { color:#ffffffe8; } .mail-preview time { font-size:10px; color:#ffffffca; text-align:right; }
   .home :focus-visible { outline:2px solid #fff; outline-offset:3px; }
   .error { margin:12px; font-size:12px; }
-  @media(max-width:650px) { .home { padding:24px; } .tools button span { display:none; } .tools button { padding:12px; } .mail-preview { grid-template-columns:minmax(80px,30%) minmax(0,1fr); gap:12px; } .mail-preview time { display:none; } }
+  @media(max-width:650px) { .home { padding:64px 24px 24px; } .tools button span { display:none; } .tools button { padding:12px; } .mail-preview { grid-template-columns:minmax(80px,30%) minmax(0,1fr); gap:12px; } .mail-preview time { display:none; } }
   @media(max-height:700px) { .welcome { padding:30px 0; } h1 { font-size:40px; margin-bottom:20px; } .latest { margin-top:22px; } }
 </style>

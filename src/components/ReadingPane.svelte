@@ -398,8 +398,16 @@
 
   function archive() {
     if (!detail) return;
-    if (mail.selectedFolder?.role === "inbox" && mail.selectedThread) {
-      void mail.setDone(mail.selectedThread, !mail.selectedThread.isDone).catch(error => {
+    if (mail.selectedFolder?.role === "inbox") {
+      const row = mail.selectedThread;
+      // Home/search can open a thread outside the currently paged list.
+      const completion = row ? mail.setDone(row, !row.isDone)
+        : api.setThreadDone(detail.id, mail.selectedMessageId, true).then(async () => {
+          mail.selectedThreadId = null;
+          mail.selectedMessageId = null;
+          await mail.refreshThreads();
+        });
+      void completion.catch(error => {
         reportError("inbox.done", error);
         mail.noteError(t("ops.failed"));
       });
