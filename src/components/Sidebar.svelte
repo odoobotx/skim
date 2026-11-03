@@ -3,7 +3,7 @@
   import { folderIcon, folderLabel, folderTree, ownFoldersHeading } from "../lib/folders";
   import { t } from "../lib/i18n/index.svelte";
   import { ai } from "../lib/stores/ai.svelte";
-  import { mail } from "../lib/stores/mail.svelte";
+  import { mail, UNIFIED } from "../lib/stores/mail.svelte";
   import { palette } from "../lib/stores/palette.svelte";
   import { ui } from "../lib/stores/ui.svelte";
   import { updater } from "../lib/stores/update.svelte";
@@ -20,8 +20,16 @@
   const showsUnread = (role: string | null) => !(role && noUnreadRoles.has(role));
 
   const mainFolders = $derived(
-    mail.folders.filter((f) => ["inbox", "sent", "drafts"].includes(f.role ?? "")),
+    ["inbox", "sent", ...(mail.sidebarPinned ? ["starred"] : []), "drafts"]
+      .flatMap(role => mail.folders.find(f => f.role === role) ?? []),
   );
+  const groupedAccounts = $derived(mail.accounts.length > 1 && mail.sidebarUnifiedGroups);
+  let accountsOpen = $state<Record<string, boolean>>({ inbox: true });
+  function openRole(role: string, accountId?: string) {
+    ui.showInbox();
+    const target = accountId ?? (groupedAccounts ? UNIFIED : mail.account?.id ?? mail.accounts[0]?.id);
+    if (target) void mail.switchAccount(target, role);
+  }
   const otherFolders = $derived(mail.folders.filter(f => f.role !== null && !["inbox", "sent", "drafts", "all", "starred"].includes(f.role)));
   let moreOpen = $state(false);
   // The user's own folders, as a tree: a nested folder prints only what its
@@ -58,20 +66,46 @@
     <div class="section">
       {#each mainFolders as folder (folder.id)}
         {@const name = folderLabel(folder)}
-        <button
-          class="item"
-          class:selected={!ui.homeOpen && mail.selectedFolderId === folder.id}
-          onclick={() => { ui.showInbox(); void mail.selectFolder(folder.id); }}
-          title={collapsed ? name : undefined}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
-            <path d={folderIcon(folder.role)} />
-          </svg>
-          <span class="name">{name}</span>
-          {#if folder.unreadCount > 0 && showsUnread(folder.role)}
-            <span class="count">{folder.unreadCount}</span>
+        {@const hasAccounts = groupedAccounts && ["inbox", "sent", "starred"].includes(folder.role ?? "")}
+        {@const unread = hasAccounts && folder.role === "inbox" ? Object.values(mail.inboxUnreadByAccount).reduce((a,b) => a+b,0) : folder.unreadCount}
+        <div class="folder-row" class:has-accounts={hasAccounts}>
+          <button
+            class="item"
+            class:selected={!ui.homeOpen && mail.selectedFolderId === folder.id && (!hasAccounts || mail.unified)}
+            onclick={() => hasAccounts ? openRole(folder.role!) : (ui.showInbox(), void mail.selectFolder(folder.id))}
+            title={hasAccounts ? `All accounts — ${name}` : collapsed ? name : undefined}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
+              <path d={folderIcon(folder.role)} />
+            </svg>
+            <span class="name">{name}</span>
+            {#if unread > 0 && showsUnread(folder.role) && folder.role !== "starred"}
+              <span class="count">{unread}</span>
+            {/if}
+          </button>
+          {#if hasAccounts && !collapsed}
+            <button class="accounts-toggle" aria-label={`${accountsOpen[folder.role!] ? "Hide" : "Show"} ${name} accounts`}
+              aria-expanded={!!accountsOpen[folder.role!]} onclick={() => accountsOpen[folder.role!] = !accountsOpen[folder.role!]}>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" class:expanded={accountsOpen[folder.role!]}><path d="m3.5 2 3 3-3 3" /></svg>
+            </button>
           {/if}
-        </button>
+        </div>
+        {#if hasAccounts && accountsOpen[folder.role!] && !collapsed}
+          <div class="account-children">
+            {#each mail.accounts as account (account.id)}
+              {@const badge = mail.accountBadge(account.id)}
+              <button class="item account-child" aria-label={`${account.email} — ${name}`} title={account.email}
+                class:selected={!ui.homeOpen && mail.account?.id === account.id && mail.selectedFolder?.role === folder.role}
+                onclick={() => openRole(folder.role!, account.id)}>
+                {#if badge}<span class="account-tag" style:background="var(--acct-{badge.color})">{badge.letter}</span>{/if}
+                <span class="name">{account.email}</span>
+                {#if folder.role === "inbox" && mail.inboxUnreadByAccount[account.id] > 0}
+                  <span class="count">{mail.inboxUnreadByAccount[account.id]}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
       {/each}
     </div>
 
@@ -302,6 +336,23 @@
   .heading {
     padding: 0 12px 6px;
   }
+  .folder-row { position: relative; }
+  .has-accounts .item { padding-right: 30px; }
+  .accounts-toggle {
+    position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+    width: 28px; height: 28px; display: grid; place-items: center;
+    color: var(--text-faint); border-radius: var(--radius-s);
+  }
+  .accounts-toggle:hover { background: var(--hover); color: var(--text); }
+  .accounts-toggle svg { transition: transform 0.12s ease; }
+  .accounts-toggle svg.expanded { transform: rotate(90deg); }
+  .account-children { padding: 2px 0 7px 12px; }
+  .account-child { gap: 7px; font-size: 11px; padding: 7px 8px; }
+  .account-tag {
+    min-width: 23px; height: 17px; padding: 0 3px; border-radius: 4px;
+    display: grid; place-items: center; color: var(--surface);
+    font: 600 9px var(--font-mono); flex-shrink: 0;
+  }
 
   .item {
     display: flex;
@@ -477,7 +528,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .sidebar,
-    .toggle {
+    .toggle,
+    .accounts-toggle svg {
       transition: none;
     }
   }

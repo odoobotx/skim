@@ -4,11 +4,11 @@ export function withoutQuotedHistory(html: string): {html: string; hasQuoted: bo
   template.innerHTML=html;
   const root=template.content;
   let removed=false;
-  for (const quote of root.querySelectorAll('.gmail_quote,.yahoo_quoted,blockquote[type="cite"]')) {
+  for (const quote of root.querySelectorAll('[data-skim-quote="history"],.gmail_quote,.yahoo_quoted,blockquote[type="cite"]')) {
     quote.remove();removed=true;
   }
-  if (removed) for (const prefix of root.querySelectorAll('.moz-cite-prefix,.gmail_attr')) prefix.remove();
-  const outlook=root.querySelector('#divRplyFwdMsg');
+  if (removed) for (const prefix of root.querySelectorAll('[data-skim-quote="attribution"],.moz-cite-prefix,.gmail_attr')) prefix.remove();
+  const outlook=root.querySelector('[data-skim-quote="outlook"],#divRplyFwdMsg');
   if (outlook) {
     let node: ChildNode|null=outlook;
     while (node) {const next:ChildNode|null=node.nextSibling;node.remove();node=next;}

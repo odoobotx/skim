@@ -66,13 +66,14 @@ pub fn category(
     };
     let nas_notice = (nas_word(local) || nas_word(&name)) && nas_word(&subject)
         || nas_word(&name) && (name.contains("notification") || name.contains("system"));
+    let mailing_list = list || unsubscribe || matches!(precedence.as_str(), "bulk" | "list");
     if ["github.com", "gitlab.com", "bitbucket.org"]
         .iter()
         .any(|d| domain == *d || domain.ends_with(&format!(".{d}")))
-        || !is_reply && (report || nas_notice)
+        || !is_reply && (report || nas_notice && !mailing_list)
     {
         "notifications"
-    } else if list || unsubscribe || matches!(precedence.as_str(), "bulk" | "list") {
+    } else if mailing_list {
         "newsletters"
     } else if (!auto.is_empty() && auto != "no")
         || [
@@ -106,14 +107,15 @@ pub struct TaskRow {
     pub is_done: bool,
     pub pending_move: bool,
     pub category: String,
-    pub is_priority: bool,
+    pub priority_override: Option<bool>,
+    pub priority_at: i64,
 }
 
 pub fn set_priority(
     conn: &Connection,
     thread: i64,
     message: Option<i64>,
-    priority: bool,
+    priority: Option<bool>,
 ) -> rusqlite::Result<()> {
     let ids = task_ids(
         conn,
@@ -121,10 +123,15 @@ pub fn set_priority(
         &message.into_iter().collect::<Vec<_>>(),
         true,
     )?;
-    conn.execute("UPDATE messages AS m SET is_priority=?2 WHERE
+    let marked_at = if priority == Some(true) {
+        chrono::Utc::now().timestamp_millis()
+    } else {
+        0
+    };
+    conn.execute("UPDATE messages AS m SET priority_override=?2,priority_at=?3 WHERE
       (m.id IN (SELECT value FROM json_each(?1)) OR (m.account_id,m.message_id) IN
         (SELECT account_id,message_id FROM messages WHERE id IN (SELECT value FROM json_each(?1)) AND message_id IS NOT NULL))
-      AND m.folder_id IN (SELECT id FROM folders WHERE role IN ('inbox','archive','all'))",params![json!(ids).to_string(),priority])?;
+      AND m.folder_id IN (SELECT id FROM folders WHERE role IN ('inbox','archive','all'))",params![json!(ids).to_string(),priority,marked_at])?;
     Ok(())
 }
 
@@ -160,7 +167,7 @@ fn inbox_rows(
     let order = if unread_only {
         "MAX(date) DESC,item DESC"
     } else {
-        "MAX(is_priority) DESC,MAX(date) DESC,item DESC"
+        "MAX(COALESCE(priority_override,0)) DESC,MAX(priority_at) DESC,MAX(date) DESC,item DESC"
     };
     let candidates = if grouped {
         format!(", page_items AS (SELECT item FROM raw_scope GROUP BY item ORDER BY {order} LIMIT ?4 OFFSET ?5)")
@@ -170,7 +177,7 @@ fn inbox_rows(
     let priority_order = if unread_only {
         ""
     } else {
-        "priority_all DESC,"
+        "COALESCE(priority_all,0) DESC,priority_time DESC,"
     };
     let page_filter = if grouped {
         "WHERE item IN (SELECT item FROM page_items)"
@@ -201,13 +208,14 @@ fn inbox_rows(
              MAX(is_starred) OVER (PARTITION BY item) AS any_star,
              MAX(local_move) OVER (PARTITION BY item) AS pending_all,
              COUNT(*) OVER (PARTITION BY item) AS n,
-             MAX(is_priority) OVER (PARTITION BY item) AS priority_all,
+             MAX(priority_override) OVER (PARTITION BY item) AS priority_all,
+             MAX(priority_at) OVER (PARTITION BY item) AS priority_time,
              MAX(has_attachments) OVER (PARTITION BY item) AS any_attachment,
              MAX(date) OVER (PARTITION BY item) AS last_date
            FROM scope
          ) SELECT thread_id,id,account_id,from_name,from_addr,subject,snippet,last_date,
              all_read,any_star,any_attachment,n,NOT outstanding,pending_all,list_id,
-             list_unsubscribe,auto_submitted,precedence,priority_all
+             list_unsubscribe,auto_submitted,precedence,priority_all,priority_time
            FROM ranked WHERE rank=1 ORDER BY {priority_order}last_date DESC,item DESC {pagination}"
     );
     let mut stmt = conn.prepare_cached(&sql)?;
@@ -233,7 +241,8 @@ fn inbox_rows(
                         &precedence,
                     )
                     .into(),
-                    is_priority: r.get(18)?,
+                    priority_override: r.get(18)?,
+                    priority_at: r.get(19)?,
                     is_done: r.get(12)?,
                     pending_move: r.get(13)?,
                     row: ThreadRow {
@@ -290,7 +299,7 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
         }
         if done {
             tx.execute(
-                "UPDATE messages SET is_read=1,is_priority=0 WHERE id=?1",
+                "UPDATE messages SET is_read=1,priority_override=NULL,priority_at=0 WHERE id=?1",
                 [id],
             )?;
             tx.execute(
@@ -738,13 +747,22 @@ mod tests {
                     other.subject = Some(format!("Different conversation {uid}"));
                     add(conn, &other);
                 }
-                set_priority(conn, thread, Some(id), true)?;
+                set_priority(conn, thread, Some(id), Some(true))?;
                 let rows = list_inbox(conn, None, false, true, 0, 10)?;
                 assert_eq!(rows[0].row.id, thread);
-                assert!(rows[0].is_priority && !rows[0].row.is_starred && !rows[0].row.is_read);
-                assert_eq!(rows.iter().filter(|row| row.is_priority).count(), 1);
+                assert!(
+                    rows[0].priority_override == Some(true)
+                        && !rows[0].row.is_starred
+                        && !rows[0].row.is_read
+                );
+                assert_eq!(
+                    rows.iter()
+                        .filter(|row| row.priority_override == Some(true))
+                        .count(),
+                    1
+                );
                 assert!(conn.query_row::<bool, _, _>(
-                    "SELECT is_priority FROM messages WHERE id=?1",
+                    "SELECT priority_override FROM messages WHERE id=?1",
                     [copy_id],
                     |r| r.get(0)
                 )?);
@@ -753,24 +771,32 @@ mod tests {
                         .get(0))?,
                     0
                 );
-                set_priority(conn, thread, Some(id), false)?;
+                set_priority(conn, thread, Some(id), Some(false))?;
                 assert!(!conn.query_row::<bool, _, _>(
-                    "SELECT is_priority FROM messages WHERE id=?1",
+                    "SELECT priority_override FROM messages WHERE id=?1",
                     [copy_id],
                     |r| r.get(0)
                 )?);
                 assert!(list_inbox(conn, None, false, true, 0, 10)?
                     .iter()
-                    .all(|row| !row.is_priority));
-                set_priority(conn, thread, None, true)?;
+                    .all(|row| row.priority_override != Some(true)));
+                set_priority(conn, thread, None, None)?;
+                let state: Option<bool> = conn.query_row(
+                    "SELECT priority_override FROM messages WHERE id=?1",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                assert_eq!(state, None);
+                set_priority(conn, thread, None, Some(true))?;
                 let ids = task_ids(conn, &[thread], &[], true)?;
                 set_done(conn, &ids, true)?;
                 assert!(
-                    !list_inbox(conn, None, true, true, 0, 200)?
+                    list_inbox(conn, None, true, true, 0, 200)?
                         .iter()
                         .find(|row| row.row.id == thread)
                         .unwrap()
-                        .is_priority
+                        .priority_override
+                        != Some(true)
                 );
                 Ok(())
             })

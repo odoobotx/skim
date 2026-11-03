@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../src/lib/inbox.ts", import.meta.url), "ut
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 });
-const { groupInbox, senderGroups, inboxSection, parseSenderRules } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { groupInbox, senderGroups, inboxSection, parseSenderRules, isPriority } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 const row = (id, fromName, fromAddr, extra = {}) => ({
   id, accountId: "work", fromName, fromAddr, subject: `Subject ${id}`,
   snippet: "", date: 100 - id, isRead: false, isStarred: false,
@@ -66,6 +66,14 @@ test("sender grouping is opt-in, address-specific, and independently reversible"
 
 test("message Priority overrides category without promoting the whole sender", () => {
   const rules={"person@example.com":{category:"newsletters"}};
-  assert.equal(inboxSection(row(1,"Person","person@example.com",{isPriority:true}),rules),"priority");
+  assert.equal(inboxSection(row(1,"Person","person@example.com",{priorityOverride:true}),rules),"priority");
   assert.equal(inboxSection(row(2,"Person","person@example.com"),rules),"newsletters");
+});
+
+test("Priority sender rules are inherited and individual messages can opt out or reset", () => {
+  const rules={"person@example.com":{priority:true}};
+  assert(isPriority(row(1,"Person","person@example.com"),rules));
+  assert(!isPriority(row(2,"Person","person@example.com",{priorityOverride:false}),rules));
+  assert(isPriority(row(2,"Person","person@example.com",{priorityOverride:null}),rules));
+  assert(!isPriority(row(3,"Person","person@example.com",{isDone:true}),rules));
 });

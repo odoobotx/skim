@@ -18,6 +18,8 @@ const ALLOWED: &[&str] = &[
     "email_appearances",
     "last_from_account",
     "sidebar_collapsed",
+    "sidebar_unified_groups",
+    "sidebar_pinned",
     "autostart",
     "ai_model",
     "ai_provider",

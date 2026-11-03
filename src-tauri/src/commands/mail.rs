@@ -153,7 +153,7 @@ pub async fn set_task_priority(
     state: State<'_, AppState>,
     thread_id: i64,
     message_id: Option<i64>,
-    priority: bool,
+    priority: Option<bool>,
 ) -> Result<()> {
     state
         .db
@@ -259,8 +259,29 @@ pub async fn list_unified_folders(state: State<'_, AppState>) -> Result<Vec<Fold
         .await
 }
 
-/// Threads in a virtual folder (all accounts), newest first. The folder is
-/// addressed by role, or by label display name when it has no role.
+/// Starred/flagged mail, in one account or across all connected accounts.
+#[tauri::command]
+pub async fn list_pinned(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+    grouped: bool,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<ThreadRow>> {
+    state
+        .db
+        .read("list_pinned", move |conn| {
+            queries::list_pinned(
+                conn,
+                account_id.as_deref(),
+                grouped,
+                offset.max(0),
+                limit.clamp(1, 200),
+            )
+        })
+        .await
+}
+
 #[tauri::command]
 pub async fn list_unified_threads(
     state: State<'_, AppState>,

@@ -10,7 +10,9 @@ import { emitDemo } from "./tauri-event";
 // Used only by headless tests, with this synthetic mailbox.
 export const commandLog: { cmd: string; args: any }[] = [];
 const savedSettings: Record<string, string> = JSON.parse(localStorage.getItem("skimdemo.settings") ?? "{}");
-const priorityRows=new Set<number>(JSON.parse(localStorage.getItem("skimdemo.priority") ?? "[]"));
+const priorityOff=new Set<number>(JSON.parse(localStorage.getItem("skimdemo.priorityOff") ?? "[]"));
+const priorityTimes:Record<string,number>=JSON.parse(localStorage.getItem("skimdemo.priorityTimes") ?? "{}");
+const priorityRows=new Set<number>(JSON.parse(localStorage.getItem("skimdemo.priority") ?? JSON.stringify(db.DEMO_PRIORITY_IDS)));
 const doneRows = new Set<number>(JSON.parse(localStorage.getItem("skimdemo.done") ?? "[]"));
 const readRows = new Set<number>([...doneRows, ...JSON.parse(localStorage.getItem("skimdemo.read") ?? "[]")]);
 if (localStorage.getItem("skimdemo.taskInbox") === "on") {
@@ -33,9 +35,9 @@ const STEP_MS = () => num("skimdemo.stepMs", 650); // tool-step dwell
 // single-account shots stay reproducible.
 const MULTI = () => {
   try {
-    return (globalThis as any).localStorage?.getItem("skimdemo.multiaccount") === "on";
+    return (globalThis as any).localStorage?.getItem("skimdemo.multiaccount") !== "off";
   } catch {
-    return false;
+    return true;
   }
 };
 
@@ -184,7 +186,7 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       try {
         theme = (globalThis as any).localStorage?.getItem("skimdemo.theme") || "moonlit-dark";
       } catch {}
-      return ok({ locale: "en", theme, images_policy: "ask", group_threads: "on", ...savedSettings });
+      return ok({ locale: "en", theme, images_policy: "ask", group_threads: "on", inbox_sender_rules:JSON.stringify(db.DEMO_SENDER_RULES), ...savedSettings });
     }
     case "set_setting":
       savedSettings[args.key] = args.value;
@@ -196,6 +198,8 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       return ok((MULTI() && args.accountId === "acc-2" ? db.FOLDERS2 : db.FOLDERS).map(folder => folder.role === "inbox" ? {...folder,unreadCount:unreadCounts()[folder.accountId] ?? 0} : folder));
     case "list_unified_folders":
       return ok(db.UNIFIED_FOLDERS.map(folder => folder.role === "inbox" ? {...folder,unreadCount:Object.values(unreadCounts()).reduce((a,b)=>a+b,0)} : folder));
+    case "list_pinned":
+      return ok(db.unifiedList("inbox").filter(row => row.isStarred && (!args.accountId || row.accountId === args.accountId)).slice(args.offset,args.offset+args.limit));
     case "list_unified_threads":
     case "list_unified_messages":
       return ok(args.offset > 0 ? [] : db.unifiedList(args.role ?? null));
@@ -212,23 +216,29 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "list_task_inbox": {
       const rows = MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row => ({...row, accountId: db.ACCOUNT.id}));
       return ok([...rows].sort((a,b)=>cmd === "list_recent_unread" ? b.date-a.date : Number(priorityRows.has(b.id))-Number(priorityRows.has(a.id)) || b.date-a.date).filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)) && (cmd !== "list_recent_unread" || !(row.isRead || readRows.has(row.id))))
-        .map(row => ({...row, isDone: doneRows.has(row.id), isRead:row.isRead || readRows.has(row.id), pendingMove: false,isPriority:priorityRows.has(row.id),
-          category: row.fromAddr.includes("github") ? "notifications" : row.fromAddr.includes("stripe") ? "newsletters" : "mail"}))
+        .map(row => ({...row, isDone: doneRows.has(row.id), isRead:row.isRead || readRows.has(row.id), pendingMove: false,priorityOverride:priorityOff.has(row.id) ? false : priorityRows.has(row.id) ? true : null,priorityAt:priorityTimes[row.id] ?? (priorityRows.has(row.id) ? row.date*1000 : 0),
+          category: db.categoryFor(row.id)}))
         .slice(args.offset ?? 0, cmd === "list_recent_unread" ? 5 : args.offset + args.limit));
     }
     case "set_task_priority":
       if (localStorage.getItem("skimdemo.failPriority") === "on") return Promise.reject(new Error("Synthetic Priority failure"));
-      if (args.priority) priorityRows.add(args.threadId); else priorityRows.delete(args.threadId);
+      priorityRows.delete(args.threadId);priorityOff.delete(args.threadId);delete priorityTimes[args.threadId];
+      if (args.priority===true) {priorityRows.add(args.threadId);priorityTimes[args.threadId]=Date.now();}
+      if (args.priority===false) priorityOff.add(args.threadId);
       localStorage.setItem("skimdemo.priority",JSON.stringify([...priorityRows]));
+      localStorage.setItem("skimdemo.priorityOff",JSON.stringify([...priorityOff]));
+      localStorage.setItem("skimdemo.priorityTimes",JSON.stringify(priorityTimes));
       return ok(undefined);
     case "set_tasks_done":
     case "set_thread_done": {
       if (localStorage.getItem("skimdemo.failArchive") === "on") return Promise.reject(new Error("Synthetic archive failure"));
       for (const id of args.threadIds ?? [args.threadId]) {
-        if (args.done) {doneRows.add(id);readRows.add(id);priorityRows.delete(id);} else doneRows.delete(id);
+        if (args.done) {doneRows.add(id);readRows.add(id);priorityRows.delete(id);priorityOff.delete(id);delete priorityTimes[id];} else doneRows.delete(id);
       }
       localStorage.setItem("skimdemo.done", JSON.stringify([...doneRows]));
       localStorage.setItem("skimdemo.priority",JSON.stringify([...priorityRows]));
+      localStorage.setItem("skimdemo.priorityOff",JSON.stringify([...priorityOff]));
+      localStorage.setItem("skimdemo.priorityTimes",JSON.stringify(priorityTimes));
       localStorage.setItem("skimdemo.read", JSON.stringify([...readRows]));
       queueMicrotask(() => emitDemo("folders:updated",{}));
       return ok(undefined);

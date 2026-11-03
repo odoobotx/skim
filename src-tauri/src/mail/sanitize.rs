@@ -208,6 +208,19 @@ pub fn sanitize_email_html(
         .inline(html)
         .unwrap_or_else(|_| html.to_string());
     let document = dom_query::Document::from(inlined);
+    // Preserve only known reply markers; ordinary email classes/IDs stay stripped.
+    document
+        .select("[data-skim-quote]")
+        .remove_attr("data-skim-quote");
+    document
+        .select(".gmail_quote,.yahoo_quoted,blockquote[type='cite']")
+        .set_attr("data-skim-quote", "history");
+    document
+        .select(".moz-cite-prefix,.gmail_attr")
+        .set_attr("data-skim-quote", "attribution");
+    document
+        .select("#divRplyFwdMsg")
+        .set_attr("data-skim-quote", "outlook");
     document.select("head").remove();
     // Ammonia parses a fragment and discards html/body attributes. Convert
     // their inlined presentation to ordinary wrappers so it survives cleaning.
@@ -270,7 +283,7 @@ pub fn sanitize_email_html(
     builder
         .tags(tags)
         .clean_content_tags(["script", "style", "svg", "math", "head", "title"].into())
-        .generic_attributes(["style", "align", "valign", "dir"].into())
+        .generic_attributes(["style", "align", "valign", "dir", "data-skim-quote"].into())
         .add_tag_attributes("a", ["href", "title"])
         .add_tag_attributes("img", ["src", "alt", "width", "height", "border"])
         .add_tag_attributes("td", ["colspan", "rowspan", "width", "height", "bgcolor"])
@@ -285,6 +298,10 @@ pub fn sanitize_email_html(
         .url_schemes(["http", "https", "mailto", "cid", "data"].into())
         .link_rel(Some("noopener noreferrer"))
         .attribute_filter(move |element, attribute, value| {
+            if attribute == "data-skim-quote" {
+                return matches!(value, "history" | "attribution" | "outlook")
+                    .then_some(Cow::Borrowed(value));
+            }
             if attribute == "style" {
                 return filter_style(value).map(Cow::Owned);
             }
@@ -379,6 +396,24 @@ mod tests {
         assert!(!rendered.html.contains("<style"));
         assert!(!rendered.html.contains("class="));
         assert!(rendered.html.contains("http://skim-cid.localhost/1/logo"));
+    }
+
+    #[test]
+    fn reply_markers_survive_without_allowing_arbitrary_classes_or_forged_markers() {
+        let result = sanitize_email_html(
+            r#"<p data-skim-quote="history">My reply</p><div class="gmail_quote">Old history</div><div class="moz-cite-prefix">On Tuesday:</div><blockquote type="cite">Older reply</blockquote><div id="divRplyFwdMsg">From header</div>"#,
+            1,
+            false,
+        );
+        assert!(result.html.contains("<p>My reply</p>"));
+        assert_eq!(
+            result.html.matches("data-skim-quote=\"history\"").count(),
+            2
+        );
+        assert!(result.html.contains("data-skim-quote=\"attribution\""));
+        assert!(result.html.contains("data-skim-quote=\"outlook\""));
+        assert!(!result.html.contains("class="));
+        assert!(!result.html.contains(" id="));
     }
 
     #[test]

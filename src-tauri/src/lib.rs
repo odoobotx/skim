@@ -345,6 +345,7 @@ pub fn run() {
             commands::mail::set_task_priority,
             commands::mail::list_messages,
             commands::mail::list_unified_folders,
+            commands::mail::list_pinned,
             commands::mail::list_unified_threads,
             commands::mail::list_unified_messages,
             commands::mail::folder_ref,

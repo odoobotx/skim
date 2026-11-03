@@ -62,7 +62,7 @@ export const api = {
     invoke<ThreadRow[]>("list_task_inbox", { accountId, showDone, grouped, offset, limit }),
   setThreadDone: (threadId: number, messageId: number | null, done: boolean) =>
     invoke<void>("set_thread_done", { threadId, messageId, done }),
-  setTaskPriority: (row: ThreadRow, priority: boolean) =>
+  setTaskPriority: (row: ThreadRow, priority: boolean | null) =>
     invoke<void>("set_task_priority", {threadId: row.id, messageId: row.messageId ?? null, priority}),
   listRecentUnread: (accountId: string | null) => invoke<ThreadRow[]>("list_recent_unread", {accountId}),
   setTasksDone: (rows: ThreadRow[], done: boolean) => invoke<void>("set_tasks_done", {
@@ -72,6 +72,8 @@ export const api = {
   listMessages: (folderId: number, offset = 0, limit = 100) =>
     invoke<ThreadRow[]>("list_messages", { folderId, offset, limit }),
   listUnifiedFolders: () => invoke<Folder[]>("list_unified_folders"),
+  listPinned: (accountId: string | null, grouped: boolean, offset = 0, limit = 100) =>
+    invoke<ThreadRow[]>("list_pinned", {accountId, grouped, offset, limit}),
   listUnifiedThreads: (role: string | null, label: string | null, offset = 0, limit = 100) =>
     invoke<ThreadRow[]>("list_unified_threads", { role, label, offset, limit }),
   listUnifiedMessages: (role: string | null, label: string | null, offset = 0, limit = 100) =>

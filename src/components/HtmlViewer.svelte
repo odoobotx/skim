@@ -263,7 +263,14 @@
         cancelable: true,
       });
       window.dispatchEvent(replay);
-      if (replay.defaultPrevented) e.preventDefault();
+      if (replay.defaultPrevented) {e.preventDefault();return;}
+      // The iframe fits its whole body; keyboard scrolling belongs to the reader.
+      const scroller=iframe?.closest<HTMLElement>(".scroll");
+      if (scroller && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const step=({ArrowDown:40,ArrowUp:-40,PageDown:scroller.clientHeight*.85,PageUp:-scroller.clientHeight*.85," ":scroller.clientHeight*.85*(e.shiftKey ? -1 : 1)} as Record<string,number>)[e.key];
+        if (step !== undefined) {scroller.scrollBy({top:step});e.preventDefault();}
+        else if (e.key === "Home" || e.key === "End") {scroller.scrollTo({top:e.key === "Home" ? 0 : scroller.scrollHeight});e.preventDefault();}
+      }
     });
     // Hover preview: report the real destination to the status bar. Entering
     // anything that isn't a link (or leaving the document) clears it.

@@ -757,6 +757,16 @@
         )}
       </section>
 
+      <section class="toggles">
+        <div class="microlabel">Sidebar</div>
+        {@render toggleRow("Unified Inbox, Sent and Pinned", mail.sidebarUnifiedGroups, () => {
+          void mail.setSidebarUnifiedGroups(!mail.sidebarUnifiedGroups).catch(error => { reportError("sidebar.save",error); mail.noteError(t("ops.failed")); });
+        })}
+        {@render toggleRow("Show Pinned", mail.sidebarPinned, () => {
+          void mail.setSidebarPinned(!mail.sidebarPinned).catch(error => { reportError("sidebar.save",error); mail.noteError(t("ops.failed")); });
+        })}
+      </section>
+
       <section>
         <div class="microlabel">{t("settings.images")}</div>
         <div class="chips">

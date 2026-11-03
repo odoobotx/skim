@@ -129,3 +129,9 @@ DEMO_PREBUILT=1 node demo/record.mjs
 ```
 
 ~2 MB and far crisper than a GIF at the same size.
+
+The interactive preview now defaults to two fictional accounts and 45 inbox
+conversations, including several Priority examples, a Priority sender with more
+than five threads, DMARC/NAS notices, newsletters and personal mail. Thread
+examples contain alternating incoming/outgoing messages with quoted reply tails.
+Set `skimdemo.multiaccount` to `off` for the older single-account recorder view.

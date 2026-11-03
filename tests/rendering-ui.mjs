@@ -121,7 +121,7 @@ try {
   assert.equal(await page.getByRole("combobox").count(), 0);
   assert.notEqual(await frame.locator("body").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(255, 255, 255)");
   await page.evaluate(()=>window.setRenderingConversation(true));
-  await show('<p>My new reply.</p><div class="gmail_quote"><div class="gmail_attr">On Tuesday, Example wrote:</div><p>Repeated earlier message.</p></div>');
+  await show(sanitize('<p>My new reply.</p><div class="gmail_quote"><div class="gmail_attr">On Tuesday, Example wrote:</div><p>Repeated earlier message.</p></div>').html);
   await frame.getByText("My new reply.",{exact:true}).waitFor();
   assert.equal(await frame.getByText("Repeated earlier message.",{exact:true}).count(),0);
   await page.getByRole("button",{name:"Show quoted history",exact:true}).click();
@@ -130,7 +130,7 @@ try {
   await show('<blockquote>An inline quotation that is part of the reply.</blockquote><p>My discussion.</p>');
   await frame.getByText("An inline quotation that is part of the reply.",{exact:true}).waitFor();
   assert.equal(await page.getByRole("button",{name:"Show quoted history",exact:true}).count(),0);
-  await show('<div class="gmail_quote"><p>This quote is the entire message.</p></div>');
+  await show(sanitize('<div class="gmail_quote"><p>This quote is the entire message.</p></div>').html);
   await frame.getByText("This quote is the entire message.",{exact:true}).waitFor();
   await show('<pre class="skim-plain">My plain reply.\nOn Tuesday Example wrote:\nRepeated plain history.</pre>');
   await frame.getByText("My plain reply.",{exact:true}).waitFor();

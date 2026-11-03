@@ -69,8 +69,13 @@ export function groupInbox(rows: ThreadRow[], mode: GroupBy): InboxGroup[] {
   return [...groups.values()];
 }
 
+/** A message exception wins over a sender rule; Done is no longer active Priority. */
+export function isPriority(row: ThreadRow, rules: SenderRules): boolean {
+  return !row.isDone && (row.priorityOverride ?? rules[senderAddress(row)]?.priority ?? false);
+}
+
 /** Explicit sender corrections override the backend's header classification. */
 export function inboxSection(row: ThreadRow, rules: SenderRules): "priority" | Category {
   const rule = Object.hasOwn(rules, senderAddress(row)) ? rules[senderAddress(row)] : undefined;
-  return row.isPriority || rule?.priority ? "priority" : rule?.category ?? row.category ?? "mail";
+  return isPriority(row,rules) ? "priority" : rule?.category ?? row.category ?? "mail";
 }

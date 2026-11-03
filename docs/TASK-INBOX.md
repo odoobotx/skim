@@ -38,10 +38,12 @@ current preview has reached it.
 - Sender drill-downs within category drill-downs.
 - Individual message/conversation Priority: hover a row and use the bolt, or use
   its context menu. This local flag is independent of server stars and sender
-  rules. Explicit Priority cards remain visible above capped sender priorities;
-  queries page Priority mail first even when it is older than the first page.
-  Done clears individual Priority. Label-folder copies share the same local flag.
-- Priority sender rules remain separately available for future mail from a sender.
+  rules. Priority sender rules automatically apply to current and future Inbox
+  mail, and the same bolt reflects that inherited status. Individual exceptions
+  can turn Priority on/off; Use sender's Priority setting restores inheritance.
+  One Priority section shows the first five groups/cards, then Show all. A new
+  manual mark sorts first; native queries page older manual Priority mail first.
+  Done clears individual overrides. Label-folder copies share the same setting.
 - Notifications also recognize DMARC report-subject signatures and NAS/system
   notice signals from sender name, address and subject, including existing cache
   entries with no automation/list headers. Human reply/forward discussions and
@@ -59,7 +61,15 @@ current preview has reached it.
 - Per-account reading layout: Full-width (default), opening an email in place
   with Back to return, or Split with a persistent list beside the reading pane.
   The same layout applies inside category and sender drill-downs. All inboxes
-  has its own saved preference. Compact Inbox/Sent/Drafts sidebar.
+  has its own saved preference. Compact Inbox/Sent/Pinned/Drafts sidebar.
+  Optional unified Inbox/Sent/Pinned parents expand into full-address account
+  rows. Selecting a child switches directly to that account and folder without
+  loading Inbox first. Settings can hide Pinned or turn off unified groups.
+  Distinct domain tags replace ambiguous name initials on unified message rows.
+- Pinned is a view of existing IMAP starred/flagged mail across folders, including
+  archived mail, with account scope, label-copy deduplication and trash/junk
+  exclusion. It does not depend on the provider exposing a Starred folder.
+  Priority remains independent and local.
 - Moonlit light/dark palettes add cool porcelain and deep blue-gray/violet
   surfaces. New profiles default to Moonlit dark. Compose follows the palette
   in every theme; Priority uses theme tokens rather than a fixed amber fill.
@@ -218,8 +228,8 @@ Behavior reference: https://sparkmailapp.com/help/manage-your-inbox/mark-as-done
    https://sparkmailapp.com/help/manage-your-inbox/customize-your-inbox
 3. **Recipient/To grouping:** expose recipient metadata through list queries and
    define multi-recipient membership before implementing.
-4. **Pins:** a separate saved-reference group, if useful, remains distinct from
-   the new individual Priority bolt and from Priority sender rules.
+4. **Pin interaction polish:** the separate Pinned view uses existing star/flag
+   actions; consider a consistent pin glyph/terminology across those controls.
 5. **Navigation polish:** remembered drill-down scroll positions. Keep secondary
    controls out of idle rows.
 6. **Platform validation:** Windows previews build through CI. Linux requires
@@ -303,3 +313,16 @@ Spark documents Pins separately from Priority senders/threads, including an
 individual hover Priority action. The consulted page does not establish its
 server-star mapping. This fork keeps local Priority separate from IMAP stars.
 https://sparkmailapp.com/help/sending-emails/pin-and-priority
+Spark's Smart Search help uses "Starred" to find pinned mail. This supports the
+choice of a flag-based Pinned view here; it does not prove Spark's IMAP storage.
+https://sparkmailapp.com/help/manage-your-inbox/use-smart-search
+
+## Browser design mailbox
+
+The preview defaults to two fictional accounts with a larger mix of personal
+mail, work conversations, service notices, DMARC/NAS reports and newsletters.
+Several senders/threads exercise the five-card Priority preview and Show all.
+Multi-message conversations include alternating incoming/outgoing cards and
+quoted history. The browser remains synthetic; its API and AI replies do not
+access real mail servers. Recorder runs can opt out with
+`skimdemo.multiaccount=off`.

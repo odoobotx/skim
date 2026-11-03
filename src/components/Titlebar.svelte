@@ -110,7 +110,7 @@
                 onclick={() => pick(a.id)}
               >
                 {#if badge}
-                  <span class="acct" style:background="var(--acct-{badge.color})">{badge.letter}</span>
+                  <span class="acct" title={badge.title} style:background="var(--acct-{badge.color})">{badge.letter}</span>
                 {/if}
                 <span class="addr">{a.email}</span>
                 {#if a.id === mail.account?.id}
@@ -221,9 +221,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
+    min-width: 23px;
+    padding: 0 3px;
+    height: 16px;
+    border-radius: 4px;
     margin-right: -6px;
     font-family: var(--font-mono);
     font-size: 9px;

@@ -183,6 +183,8 @@ export const ACCOUNT2 = {
 
 export const FOLDERS2 = [
   { id: 11, accountId: "acc-2", imapName: "INBOX", role: "inbox", displayName: "Inbox", unreadCount: 2, sortOrder: 0 },
+  { id: 14, accountId: "acc-2", imapName: "Drafts", role: "drafts", displayName: "Drafts", unreadCount: 0, sortOrder: 3 },
+  { id: 15, accountId: "acc-2", imapName: "Archive", role: "archive", displayName: "Archive", unreadCount: 0, sortOrder: 4 },
   { id: 13, accountId: "acc-2", imapName: "Sent", role: "sent", displayName: "Sent", unreadCount: 0, sortOrder: 2 },
   { id: 16, accountId: "acc-2", imapName: "Trash", role: "trash", displayName: "Trash", unreadCount: 0, sortOrder: 5 },
 ];
@@ -229,8 +231,51 @@ const ACC2_INBOX_THREADS = [
   },
 ];
 
+// A richer design mailbox: fixtures only, never real accounts or provider calls.
+const CATEGORIES:Record<number,string>={104:"notifications",106:"notifications",108:"notifications"};
+export const DEMO_PRIORITY_IDS=[450,451,260];
+export const DEMO_SENDER_RULES={
+  "marcus@acme-partners.example":{priority:true},
+  "brief@northstar.example":{category:"newsletters",group:true},
+};
+export function categoryFor(id:number) {return CATEGORIES[id] ?? "mail";}
+function fixture(id:number,fromName:string,fromAddr:string,subject:string,age:number,category="mail",personal=false) {
+  const row={...INBOX_THREADS[0],id,fromName,fromAddr,subject,
+    snippet:category==="mail" ? "A short update, a clear next step, and a little context for the conversation." : "An automatic update for your records. Open the message for the details.",
+    date:NOW-age,isRead:id%3===0,isStarred:false,hasAttachments:false,messageCount:1};
+  CATEGORIES[id]=category;
+  if (personal) ACC2_INBOX_THREADS.push({...row,accountId:"acc-2"});else INBOX_THREADS.push(row);
+}
+for (const [i,subject] of ["Renewal timeline and next steps","Budget sign-off for next quarter","Updated scope — one question","A quick introduction to our project lead","Workshop notes and decisions","Contract signature is ready","Support handover checklist"].entries()) {
+  fixture(410+i,"Marcus Lee","marcus@acme-partners.example",subject,(12+i*3)*H);
+}
+fixture(430,"DMARC reports","dmarc@reports.example","Report domain: brightwave.example Submitter: reports.example Report-ID: 2041",H,"notifications");
+fixture(431,"Office NAS","admin@office-nas.example","[Office NAS] Backup completed successfully",3*H,"notifications");
+fixture(432,"Synology System Notification","service@storage.example","Active Backup task completed",6*H,"notifications");
+fixture(433,"Parcel updates","updates@parcel.example","Your parcel will arrive tomorrow",8*H,"notifications",true);
+fixture(434,"Cloud monitor","alerts@monitor.example","Weekly service health report",D,"notifications");
+fixture(435,"Calendar service","notices@calendar.example","Reminder: product review at 10:00",2*H,"notifications");
+for (let i=0;i<6;i++) fixture(440+i,"Northstar Weekly","brief@northstar.example",["A quieter way to plan your week","Three ideas for better focus","The weekly reading list","A small guide to finishing well","Design notes from the field","Five things worth your attention"][i],(2+i)*D,"newsletters");
+for (let i=0;i<3;i++) fixture(446+i,"Design Dispatch","hello@design-dispatch.example",`Design Dispatch — issue ${84+i}`,(3+i*2)*D,"newsletters");
+fixture(450,"Elliot Chen","elliot@cedar.example","Approval needed — production proof",H);
+fixture(451,"Maya Brooks","maya@harbor.example","A decision before Friday",10*H);
+fixture(452,"Sam Patel","sam@brightwave.example","Office hours — questions welcome",4*H);
+fixture(453,"Nora James","nora@brightwave.example","Notes from today's customer calls",7*H);
+fixture(454,"Jonas Berg","jonas@client.example","Can we discuss the NAS backup?",11*H);
+fixture(455,"Ari Walsh","ari@brightwave.example","Re: DMARC policy review",13*H);
+fixture(260,"Jamie Parker","jamie@friends.example","Weekend plans — shall I book the table?",4*H,"mail",true);
+fixture(261,"School office","office@school.example","Parent evening — choose your time",12*H,"mail",true);
+fixture(262,"Trail Notes","hello@trail-notes.example","A weekend outside — October edition",2*D,"newsletters",true);
+fixture(263,"Community garden","garden@community.example","Saturday planting — quick update",D,"mail",true);
+fixture(264,"Home NAS","nas@home-storage.example","[Home NAS] Storage health report",D+H,"notifications",true);
+fixture(265,"Avery Lane","avery@friends.example","Photos from the coast",3*D,"mail",true);
+INBOX_THREADS.find(row => row.id === 452)!.isStarred=true;
+ACC2_INBOX_THREADS.find(row => row.id === 265)!.isStarred=true;
+
 // Drilling into the second mailbox lists its inbox by real folder id.
 THREADS_BY_FOLDER[11] = ACC2_INBOX_THREADS;
+THREADS_BY_FOLDER[13]=[{...THREADS_BY_FOLDER[3][0],id:601,subject:"Re: Weekend plans",fromAddr:ACCOUNT2.email,snippet:"Saturday at seven works for me — thank you for booking."}];
+THREADS_BY_FOLDER[14]=[];THREADS_BY_FOLDER[15]=[];
 // "Clients" holds mail (so it can't be deleted); "Receipts" (31) stays empty.
 THREADS_BY_FOLDER[30] = [INBOX_THREADS[1]];
 
@@ -252,7 +297,7 @@ export function unifiedList(role: string | null): typeof INBOX_THREADS {
   const byRole: Record<string, typeof INBOX_THREADS> = {
     inbox: [...tag(INBOX_THREADS, "acc-1"), ...ACC2_INBOX_THREADS],
     starred: tag([INBOX_THREADS[4]], "acc-1"),
-    sent: tag(THREADS_BY_FOLDER[3], "acc-1"),
+    sent: [...tag(THREADS_BY_FOLDER[3], "acc-1"),...tag(THREADS_BY_FOLDER[13],"acc-2")],
   };
   return (byRole[role ?? ""] ?? []).slice().sort((a, b) => b.date - a.date);
 }
@@ -336,36 +381,37 @@ export function bodyFor(threadId: number): string {
 // A thread's messages. The reading pane shows the newest one in-folder, so a
 // single well-formed message per thread is enough for the demo.
 export function threadDetail(threadId: number) {
-  const secondary = ACC2_INBOX_THREADS.find((x) => x.id === threadId);
-  const inInbox = INBOX_THREADS.find((x) => x.id === threadId) ?? secondary;
-  const t = inInbox ?? THREADS_BY_FOLDER[3].find((x) => x.id === threadId);
+  const secondary = ACC2_INBOX_THREADS.find((x) => x.id === threadId) ?? THREADS_BY_FOLDER[13]?.find(x=>x.id===threadId);
+  const inInbox = INBOX_THREADS.find((x) => x.id === threadId) ?? ACC2_INBOX_THREADS.find(x=>x.id===threadId);
+  const t = inInbox ?? secondary ?? THREADS_BY_FOLDER[3].find((x) => x.id === threadId);
   if (!t) {
     return { id: threadId, subject: "(demo)", messages: [] };
   }
-  const folderId = secondary ? 11 : inInbox ? 1 : 3;
-  return {
-    id: t.id,
-    subject: t.subject,
-    messages: [
-      {
-        id: t.id * 10 + 1,
-        accountId: secondary ? "acc-2" : "acc-1",
-        folderId,
-        threadId: t.id,
-        subject: t.subject,
-        from: { name: t.fromName, addr: t.fromAddr },
-        to: [{ name: "Alex Morgan", addr: "alex@brightwave.io" }],
-        cc: [],
-        date: t.date,
-        snippet: t.snippet,
-        isRead: t.isRead,
-        isStarred: t.isStarred,
-        hasAttachments: t.hasAttachments,
-        bodyState: 2,
-      },
-    ],
-  };
+  const folderId = secondary ? (inInbox ? 11 : 13) : inInbox ? 1 : 3;
+  const steps=threadId===101 ? [
+    "Can we confirm the launch checklist and who owns the final proof?",
+    "I can own the proof. Is Thursday still the target?",
+    "Yes, Thursday works. Design and support have both signed off.",
+    "Great — I have approved the final proof. Please send the release notes.",
+    "The release notes are attached. We are ready for Thursday.",
+  ] : ["Here is the first version for review.","Thanks — I have added a few notes.","The update is ready. Let me know what you think.","Everything looks good from my side.","We have a plan. I will send the final details shortly."];
+  const count=t.messageCount;
+  const messages=Array.from({length:count},(_,i)=> {
+    const outgoing=i<count-1 && i%2===1;
+    const id=i===count-1 ? t.id*10+1 : t.id*100+10+i;
+    const text=steps[Math.min(i,steps.length-1)];
+    if (count>1) CONVERSATION_BODIES[id]=`<p>${text}</p>${i>0 ? `<div class="gmail_quote"><div class="gmail_attr">On an earlier date, the conversation continued:</div><p>${steps[Math.min(i-1,steps.length-1)]}</p></div>` : ""}`;
+    return {id,accountId:secondary ? "acc-2" : "acc-1",folderId:outgoing ? (secondary ? 13 : 3) : folderId,
+      threadId:t.id,subject:t.subject,
+      from:outgoing ? {name:"Alex Morgan",addr:secondary ? ACCOUNT2.email : ACCOUNT.email} : {name:t.fromName,addr:t.fromAddr},
+      to:[{name:outgoing ? t.fromName : "Alex Morgan",addr:outgoing ? t.fromAddr : (secondary ? ACCOUNT2.email : ACCOUNT.email)}],
+      cc:[],date:t.date-(count-1-i)*H,snippet:count>1 ? text : t.snippet,isRead:i<count-1 || t.isRead,
+      isStarred:t.isStarred,hasAttachments:i===count-1 && t.hasAttachments,bodyState:2};
+  });
+  return {id:t.id,subject:t.subject,messages};
 }
+
+const CONVERSATION_BODIES:Record<number,string>={};
 
 export function renderedBody(messageId: number) {
   const attachments =
@@ -379,7 +425,7 @@ export function renderedBody(messageId: number) {
         : [];
   return {
     messageId,
-    html: bodyFor(Math.floor(messageId / 10)),
+    html: CONVERSATION_BODIES[messageId] ?? bodyFor(Math.floor(messageId / 10)),
     blockedImages: 0,
     fromAddr: null,
     attachments,

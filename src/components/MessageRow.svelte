@@ -14,6 +14,7 @@
     completing = false,
     oncontextmenu,
     onpriority,
+    priority = thread.priorityOverride ?? false,
   }: {
     thread: ThreadRow;
     selected?: boolean;
@@ -25,6 +26,7 @@
     completing?: boolean;
     oncontextmenu?: (event: MouseEvent) => void;
     onpriority?: () => void;
+    priority?: boolean;
   } = $props();
 
   // Which mailbox this row came from — shown only in the unified view, where
@@ -57,9 +59,9 @@
       onclick={(event) => { if (event.detail === 0) ondone?.(); }}>✓</button>
   {/if}
   {#if onpriority}
-    <button class="priority-check" class:active={thread.isPriority} aria-pressed={thread.isPriority ?? false}
-      aria-label={thread.isPriority ? "Remove message Priority" : "Mark message Priority"} title={thread.isPriority ? "Remove message Priority" : "Mark message Priority"} onclick={onpriority}>
-      <svg width="14" height="14" viewBox="0 0 16 16" fill={thread.isPriority ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M9.5 1.5L3 9h4l-.5 5.5L13 6H9l.5-4.5z" /></svg>
+    <button class="priority-check" class:active={priority} aria-pressed={priority ?? false}
+      aria-label={priority ? "Remove message Priority" : "Mark message Priority"} title={priority ? "Remove message Priority" : "Mark message Priority"} onclick={onpriority}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill={priority ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M9.5 1.5L3 9h4l-.5 5.5L13 6H9l.5-4.5z" /></svg>
     </button>
   {/if}
   <button
@@ -78,7 +80,7 @@
         {#if !thread.isRead}<span class="unread-dot"></span>{/if}
         <span class="sender-avatar" aria-hidden="true">{initials || "?"}</span>
         {#if badge}
-          <span class="acct" style:background="var(--acct-{badge.color})">{badge.letter}</span>
+          <span class="acct" title={badge.title} aria-label={badge.title} style:background="var(--acct-{badge.color})">{badge.letter}</span>
         {/if}
         {thread.fromName}
         {#if thread.messageCount > 1}<span class="mcount">{thread.messageCount}</span>{/if}
@@ -215,9 +217,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
+    min-width: 23px;
+    padding: 0 3px;
+    height: 16px;
+    border-radius: 4px;
     font-family: var(--font-mono);
     font-size: 9px;
     font-weight: 600;
