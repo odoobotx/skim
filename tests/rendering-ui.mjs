@@ -61,8 +61,14 @@ try {
   await page.waitForFunction(() => typeof window.setRenderingHtml === "function");
   const frame = page.frameLocator("iframe");
   async function show(html) {
-    await page.evaluate(value => window.setRenderingHtml(value), html);
-    await page.waitForFunction(() => document.querySelector("iframe")?.contentDocument?.body?.childElementCount > 0);
+    await page.evaluate(value => {
+      window.__previousRenderingDocument = document.querySelector("iframe")?.contentDocument;
+      window.setRenderingHtml(value);
+    }, html);
+    await page.waitForFunction(() => {
+      const doc = document.querySelector("iframe")?.contentDocument;
+      return doc !== window.__previousRenderingDocument && doc?.body?.childElementCount > 0;
+    });
   }
   await show(sanitized.html);
   const logo = frame.getByAltText("Example logo");
@@ -81,7 +87,10 @@ try {
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "detached" });
   await page.getByRole("combobox", { name: "Email appearance" }).selectOption("theme");
-  await page.waitForFunction(() => getComputedStyle(document.querySelector("iframe").contentDocument.body).backgroundColor !== "rgb(255, 255, 255)");
+  await page.waitForFunction(() => {
+    const body = document.querySelector("iframe")?.contentDocument?.body;
+    return body && getComputedStyle(body).backgroundColor !== "rgb(255, 255, 255)";
+  });
   assert.equal(await frame.getByText("Hello Example User,").evaluate(el => getComputedStyle(el).color), "rgb(236, 236, 239)");
   await page.getByRole("combobox", { name: "Email appearance" }).selectOption("original");
 
