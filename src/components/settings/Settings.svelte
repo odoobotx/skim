@@ -1591,7 +1591,8 @@
     gap: 6px;
   }
   .writer-field input,
-  .writer-field textarea {
+  .writer-field textarea,
+  .writer-field select {
     padding: 8px 10px;
     border: 1px solid var(--hairline-strong);
     border-radius: var(--radius-s);
@@ -1601,8 +1602,16 @@
     font-family: inherit;
   }
   .writer-field input:focus,
-  .writer-field textarea:focus {
+  .writer-field textarea:focus,
+  .writer-field select:focus-visible {
     border-color: var(--accent-dim);
+  }
+  .writer-field select {
+    min-height: 38px;
+    color: var(--text);
+    background: var(--surface);
+    outline: none;
+    cursor: pointer;
   }
   .hint {
     font-size: 11.5px;
