@@ -1,16 +1,14 @@
-/* Skim design tokens — single source of truth for the theme matrix.
-   Themes are two axes: temperature (cold | warm) × lightness (light | dark),
-   carried by a single `data-theme="{temp}-{lightness}"` attribute on <html>.
-   Exactly one of the four blocks matches at a time.
-   Violet/plum (--accent) is reserved exclusively for AI moments.
-   --hl-* (highlighter inks) are defined only in the warm blocks — the
-   highlighter-on-bold treatment is a quiet-zine signature and absent in cold.
-   --acct-1..5 mark mailboxes in the unified view (letter-in-disc badges);
-   assigned by account order, repeating past five. Ordered so neighbours come
-   from different hue families (blue, amber, teal, rose, green) and stay easy
-   to tell apart. Deliberately no violet — that's AI's. */
+/* Skim theme tokens: palette × lightness, selected by data-theme.
+   Moonlit is the fork's blue-gray/violet palette. Legacy Cold/Warm remain
+   available. Static surface highlights add depth without animated effects. */
 
 :root {
+  --sidebar-bg: var(--bg);
+  --compose-bg: linear-gradient(120deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), color-mix(in srgb, var(--accent) 5%, var(--surface)));
+  --compose-border: color-mix(in srgb, var(--accent) 26%, var(--hairline-strong));
+  --priority-bg: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  --priority-border: color-mix(in srgb, var(--accent) 14%, transparent);
+
   /* type — shared across all themes */
   --font-ui: "Hanken Grotesk Variable", "Hanken Grotesk", "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
@@ -160,5 +158,62 @@
 
   --shadow-pop: 0 8px 32px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.4);
 
+  color-scheme: dark;
+}
+
+/* Moonlit light — cool porcelain, without cream or sepia. */
+:root[data-theme="moonlit-light"] {
+  --bg: #f0f3f9;
+  --surface: #fbfcff;
+  --surface-raised: #ffffff;
+  --text: #202b43;
+  --text-dim: #52627e;
+  --text-faint: #66758d;
+  --hairline: rgba(40, 57, 89, 0.09);
+  --hairline-strong: rgba(40, 57, 89, 0.17);
+  --hover: rgba(89, 111, 169, 0.065);
+  --active: rgba(89, 111, 169, 0.11);
+  --selected: #e1e8f6;
+  --accent: #6455bd;
+  --accent-soft: #e8e5f9;
+  --accent-dim: rgba(100, 85, 189, 0.5);
+  --on-accent: #ffffff;
+  --danger: #bd3c5d;
+  --success: #247c75;
+  --acct-1: #4678b0;
+  --acct-2: #8c65ac;
+  --acct-3: #32857e;
+  --acct-4: #b15779;
+  --acct-5: #657baf;
+  --shadow-pop: 0 12px 36px rgba(39, 54, 89, 0.14), 0 1px 4px rgba(39, 54, 89, 0.06);
+  color-scheme: light;
+}
+
+/* Moonlit dark — deep ink with still, luminous blue/violet surfaces. */
+:root[data-theme="moonlit-dark"] {
+  --bg: #0c111e;
+  --surface: #151d2e;
+  --surface-raised: #1d2940;
+  --text: #e8edf8;
+  --text-dim: #b1bdd4;
+  --text-faint: #8a9ab7;
+  --hairline: rgba(163, 185, 229, 0.10);
+  --hairline-strong: rgba(163, 185, 229, 0.18);
+  --hover: rgba(148, 174, 235, 0.065);
+  --active: rgba(148, 174, 235, 0.11);
+  --selected: #24314c;
+  --accent: #b1a7f4;
+  --accent-soft: rgba(157, 144, 236, 0.13);
+  --accent-dim: rgba(177, 167, 244, 0.45);
+  --on-accent: #151325;
+  --danger: #ef8da4;
+  --success: #79c6bc;
+  --acct-1: #91b9ee;
+  --acct-2: #b2a2e1;
+  --acct-3: #83c4be;
+  --acct-4: #d59fbc;
+  --acct-5: #9daee4;
+  --sidebar-bg: radial-gradient(ellipse at 15% 0%, rgba(121, 125, 207, 0.08), transparent 65%), var(--bg);
+  --shadow-pop: 0 16px 42px rgba(3, 7, 17, 0.5), 0 1px 4px rgba(3, 7, 17, 0.3);
   color-scheme: dark;
 }

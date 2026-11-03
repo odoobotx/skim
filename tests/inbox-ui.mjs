@@ -142,6 +142,32 @@ try {
     ui.setTheme("cold", "dark");
   });
   await page.screenshot({ path: new URL("../demo/output/task-inbox-dark.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
+  // The custom theme persists, and Compose uses palette surfaces in every mode.
+  await page.locator("nav.sidebar").getByRole("button", {name:/Settings$/}).click();
+  await page.getByRole("button",{name:"Moonlit · Dark",exact:true}).click();
+  await page.locator(".overlay .close").click();
+  await page.reload();
+  await page.getByRole("button",{name:"Check Inbox"}).click();
+  assert.equal(await page.locator("html").getAttribute("data-theme"),"moonlit-dark");
+  for (const temperature of ["moonlit","cold","warm"]) for (const lightness of ["dark","light"]) {
+    await page.evaluate(async ({temperature,lightness}) => {
+      (await import("/src/lib/stores/ui.svelte.ts")).ui.setTheme(temperature,lightness);
+    },{temperature,lightness});
+    const compose=await page.locator("nav.sidebar .compose").evaluate(el => {
+      const s=getComputedStyle(el), root=getComputedStyle(document.documentElement);
+      return {color:s.color,text:root.getPropertyValue("--text").trim(),fill:s.backgroundImage,border:s.borderTopStyle};
+    });
+    assert.notEqual(compose.fill,"none",`${temperature}-${lightness} should use the shared Compose surface`);
+    assert.equal(compose.border,"solid");
+    // Compare normalized CSS colors rather than hex/rgb formatting.
+    assert(await page.locator("nav.sidebar .compose").evaluate(el => {
+      const probe=document.createElement("span");probe.style.color="var(--text)";el.append(probe);
+      const matches=getComputedStyle(el).color===getComputedStyle(probe).color;probe.remove();return matches;
+    }));
+  }
+  await page.evaluate(async () => (await import("/src/lib/stores/ui.svelte.ts")).ui.setTheme("moonlit","dark"));
+  await page.screenshot({path:new URL("../demo/output/task-inbox-moonlit.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
+
   await page.evaluate(async () => {
     const {mail}=await import("/src/lib/stores/mail.svelte.ts");
     await mail.setShowDone(false);

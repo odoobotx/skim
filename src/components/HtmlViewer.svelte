@@ -101,6 +101,7 @@
     if (!appearanceOpen) return;
     const outside = (event: PointerEvent) => { if (!appearanceMenu?.contains(event.target as Node)) appearanceOpen=false; };
     const key = (event: KeyboardEvent) => {
+      event.stopPropagation();
       if (event.key === "Escape") { event.stopPropagation(); appearanceOpen=false; appearanceMenu?.querySelector("summary")?.focus(); }
       if (["ArrowDown","ArrowUp"].includes(event.key)) {
         event.preventDefault(); event.stopPropagation();

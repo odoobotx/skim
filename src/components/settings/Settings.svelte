@@ -31,6 +31,16 @@
       line2: string;
     }
   > = {
+    "moonlit-light": {
+      bg: "#f0f3f9", surface: "#fbfcff", text: "#202b43",
+      accent: "#6455bd", accentSoft: "#e8e5f9", accentBorder: "rgba(100,85,189,0.5)",
+      line: "rgba(40,57,89,0.22)", line2: "rgba(40,57,89,0.14)",
+    },
+    "moonlit-dark": {
+      bg: "#0c111e", surface: "#151d2e", text: "#e8edf8",
+      accent: "#b1a7f4", accentSoft: "rgba(157,144,236,0.13)", accentBorder: "rgba(177,167,244,0.45)",
+      line: "rgba(163,185,229,0.25)", line2: "rgba(163,185,229,0.16)",
+    },
     "cold-light": {
       bg: "#f7f7f6",
       surface: "#ffffff",
@@ -681,12 +691,13 @@
         <div class="theme-matrix">
           <!-- header row: temperature axis -->
           <div></div>
+          <div class="axis">{t("theme.moonlit")}</div>
           <div class="axis">{t("theme.cold")}</div>
           <div class="axis">{t("theme.warm")}</div>
 
           {#each [{ light: "light" as Lightness }, { light: "dark" as Lightness }] as row (row.light)}
             <div class="axis right">{t(`theme.${row.light}`)}</div>
-            {#each ["cold" as Temperature, "warm" as Temperature] as temp (temp)}
+            {#each ["moonlit" as Temperature, "cold" as Temperature, "warm" as Temperature] as temp (temp)}
               {@const p = THEME_PREVIEWS[`${temp}-${row.light}`]}
               <button
                 class="cell"
@@ -1252,7 +1263,7 @@
   /* Theme matrix: temperature (columns) × lightness (rows), live mini-previews. */
   .theme-matrix {
     display: grid;
-    grid-template-columns: 64px 1fr 1fr;
+    grid-template-columns: 48px repeat(3, minmax(0, 1fr));
     gap: 10px 12px;
     align-items: center;
   }

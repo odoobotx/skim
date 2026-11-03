@@ -122,6 +122,7 @@
   $effect(() => { if (menu) menuEl?.querySelector<HTMLButtonElement>("button")?.focus(); });
   function dismiss(event:PointerEvent) { if (menu && !menuEl?.contains(event.target as Node)) menu=null; }
   function menuKey(event:KeyboardEvent) {
+    event.stopPropagation();
     if (event.key === "Escape") { event.stopPropagation(); menu=null; }
     if (["ArrowDown","ArrowUp","Home","End"].includes(event.key)) {
       event.preventDefault();
@@ -261,8 +262,8 @@
   .count { font-size: 11px; font-weight: 400; color: var(--text-faint); }
   .arrow { margin-left: auto; }
   .preview { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 4px 0; font-size: 12px; color: var(--text-dim); }
-  .priority { margin:12px 0; border-radius:14px; background:color-mix(in srgb,#b68b35 8%,var(--bg)); }
-  .priority h2 { color:#b68b35; }
+  .priority { margin:12px 0; border-radius:14px; background:var(--priority-bg); border:1px solid var(--priority-border); }
+  .priority h2 { color:var(--accent); }
   h2 { font-size: 13px; padding: 12px 16px; }
   .more { width: 100%; padding: 12px 16px; font-size: 12px; color: var(--text-dim); text-align: left; }
 </style>

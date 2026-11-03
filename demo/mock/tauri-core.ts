@@ -177,11 +177,11 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       return ok(null);
 
     // settings — the recorder/screenshotter can force a theme via localStorage.
-    // Theme is two-axis ("<cold|warm>-<light|dark>"); warm-light is the app default.
+    // Recorder overrides stay available; fresh previews use the fork's default.
     case "get_settings": {
-      let theme = "warm-light";
+      let theme = "moonlit-dark";
       try {
-        theme = (globalThis as any).localStorage?.getItem("skimdemo.theme") || "warm-light";
+        theme = (globalThis as any).localStorage?.getItem("skimdemo.theme") || "moonlit-dark";
       } catch {}
       return ok({ locale: "en", theme, images_policy: "ask", group_threads: "on", ...savedSettings });
     }

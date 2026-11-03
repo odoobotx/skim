@@ -226,7 +226,7 @@
     display: flex;
     flex-direction: column;
     border-right: 1px solid var(--hairline);
-    background: var(--bg);
+    background: var(--sidebar-bg);
     /* visible so the toggle FAB can protrude past the right edge; scrolling
        lives on the inner .scroll wrapper. */
     overflow: visible;
@@ -252,14 +252,17 @@
     gap: 8px;
     padding: 9px 12px;
     border-radius: var(--radius-m);
-    background: var(--text);
-    color: var(--bg);
+    background: var(--compose-bg);
+    color: var(--text);
+    border: 1px solid var(--compose-border);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
     font-weight: 600;
     font-size: 13.5px;
-    transition: opacity 0.1s;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
   .compose:hover {
-    opacity: 0.88;
+    border-color: var(--accent-dim);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent), 0 0 0 2px var(--accent-soft);
   }
   .plus {
     font-size: 16px;
@@ -288,8 +291,7 @@
     color: var(--text-faint);
   }
   .compose kbd {
-    color: var(--bg);
-    opacity: 0.55;
+    color: var(--text-dim);
   }
 
   .section {

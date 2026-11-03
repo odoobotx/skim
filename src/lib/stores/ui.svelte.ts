@@ -26,9 +26,9 @@ export type FolderEdit = { id: number; name: string };
 
 const state = $state({
   homeOpen: true,
-  /** Warm (quiet-zine) vs cold (classic) neutrals. */
-  temperature: "warm" as Temperature,
-  lightness: "light" as Lightness,
+  /** Palette and light/dark are independent preferences. */
+  temperature: "moonlit" as Temperature,
+  lightness: "dark" as Lightness,
   settingsOpen: false,
   /** AI Recap panel occupies the reading pane while open. */
   recapOpen: false,
@@ -45,13 +45,15 @@ const state = $state({
 /** Parse a persisted theme string into the two axes, migrating legacy values.
  *  Legacy (single-axis) values map onto the cold palette so existing users keep
  *  their look; "system" is resolved once against the OS (auto-switching is gone).
- *  Anything unknown/empty falls back to the new default, warm-light. */
+ *  Anything unknown/empty falls back to Moonlit dark. */
 function parseTheme(raw: string | undefined): { temperature: Temperature; lightness: Lightness } {
   switch (raw) {
     case "cold-light":
     case "cold-dark":
     case "warm-light":
-    case "warm-dark": {
+    case "warm-dark":
+    case "moonlit-light":
+    case "moonlit-dark": {
       const [temperature, lightness] = raw.split("-") as [Temperature, Lightness];
       return { temperature, lightness };
     }
@@ -62,7 +64,7 @@ function parseTheme(raw: string | undefined): { temperature: Temperature; lightn
     case "system":
       return { temperature: "cold", lightness: media.matches ? "dark" : "light" };
     default:
-      return { temperature: "warm", lightness: "light" };
+      return { temperature: "moonlit", lightness: "dark" };
   }
 }
 

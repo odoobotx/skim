@@ -44,6 +44,9 @@ current preview has reached it.
   with Back to return, or Split with a persistent list beside the reading pane.
   The same layout applies inside category and sender drill-downs. All inboxes
   has its own saved preference. Compact Inbox/Sent/Drafts sidebar.
+- Moonlit light/dark palettes add cool porcelain and deep blue-gray/violet
+  surfaces. New profiles default to Moonlit dark. Compose follows the palette
+  in every theme; Priority uses theme tokens rather than a fixed amber fill.
 - Email Appearance menu explains Original and Match app theme, with keyboard
   navigation, Escape and outside-click dismissal.
 - Hover/focus Done controls on individual rows and group summaries.
@@ -132,8 +135,18 @@ Behavior reference: https://sparkmailapp.com/help/manage-your-inbox/mark-as-done
    counts and sender drill-downs cover all cached mail without loading every
    conversation into the frontend. Current group actions cover the loaded rows,
    as indicated in the list; they must not imply completion of unloaded history.
-2. **Classification accuracy:** header/sender rules are now automatic, but need a
-   labeled evaluation set and user feedback. No claim of Spark-level accuracy.
+2. **Classification accuracy:** the current deterministic first pass is not
+   Spark-level classification. Improve at message/mail-stream level: distinguish
+   personal replies, transactional alerts and broadcasts even from one address.
+   Combine list/automation headers, recipient and reply/thread context, plus
+   content signals when available. Uncertain mail stays visible under People.
+   Corrections should offer this message/this recurring stream/always this sender,
+   rather than silently treating every correction as a permanent sender rule.
+   Keep reason/confidence/version for evaluation and compare a labeled local
+   sample against Spark's observed categories without exporting private mail.
+   Spark documents sender-wide manual corrections but does not describe its
+   classifier in the consulted public category documentation:
+   https://sparkmailapp.com/help/manage-your-inbox/customize-your-inbox
 3. **Recipient/To grouping:** expose recipient metadata through list queries and
    define multi-recipient membership before implementing.
 4. **Pins:** expose a compact pinned group independently from Priority senders.
