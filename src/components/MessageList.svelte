@@ -129,7 +129,7 @@
   }
 </script>
 
-<section class="list">
+<section class="list" class:wide={mail.selectedThreadId === null && !ui.recapOpen}>
   <header class="head">
     {#if mail.selecting}
       <!-- The header becomes the action bar rather than a second strip
@@ -208,6 +208,13 @@
 </section>
 
 <style>
+  .list.wide { width:auto; flex:1; }
+  .list.wide :global(.row) { display:grid; grid-template-columns:minmax(170px, 26%) minmax(0, 1fr); align-items:center; gap:4px 20px; min-height:56px; }
+  .list.wide :global(.line1) { display:contents; }
+  .list.wide :global(.from) { grid-column:1; grid-row:1 / 3; }
+  .list.wide :global(.date) { position:absolute; right:44px; top:12px; }
+  .list.wide :global(.subject) { grid-column:2; padding-right:90px; }
+  .list.wide :global(.snippet) { grid-column:2; }
   .list {
     width: var(--list-w);
     flex-shrink: 0;

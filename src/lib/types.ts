@@ -42,6 +42,9 @@ export interface Folder {
 }
 
 export interface ThreadRow {
+  isDone?: boolean;
+  pendingMove?: boolean;
+  category?: "mail" | "notifications" | "newsletters";
   id: number;
   /** Set only in flat (ungrouped) mode: the specific message this row is. */
   messageId?: number | null;

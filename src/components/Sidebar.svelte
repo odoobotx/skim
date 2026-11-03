@@ -20,8 +20,10 @@
   const showsUnread = (role: string | null) => !(role && noUnreadRoles.has(role));
 
   const mainFolders = $derived(
-    mail.folders.filter((f) => f.role !== null && f.role !== "all" && f.role !== "starred"),
+    mail.folders.filter((f) => ["inbox", "sent", "drafts"].includes(f.role ?? "")),
   );
+  const otherFolders = $derived(mail.folders.filter(f => f.role !== null && !["inbox", "sent", "drafts", "all", "starred"].includes(f.role)));
+  let moreOpen = $state(false);
   // The user's own folders, as a tree: a nested folder prints only what its
   // parent row does not already say, and leans on an indent for the rest.
   const labels = $derived(folderTree(mail.folders.filter((f) => f.role === null)));
@@ -36,6 +38,9 @@
 
 <nav class="sidebar" class:collapsed={ui.sidebarCollapsed}>
   <div class="scroll">
+    <button class="item" class:selected={ui.homeOpen} onclick={() => ui.showHome()} title="Home">
+      <span aria-hidden="true">⌂</span><span class="name">Home</span>
+    </button>
     <button class="compose" onclick={compose} title={collapsed ? t("nav.compose") : undefined}>
       <span class="plus">+</span>
       <span class="name">{t("nav.compose")}</span>
@@ -55,8 +60,8 @@
         {@const name = folderLabel(folder)}
         <button
           class="item"
-          class:selected={mail.selectedFolderId === folder.id}
-          onclick={() => mail.selectFolder(folder.id)}
+          class:selected={!ui.homeOpen && mail.selectedFolderId === folder.id}
+          onclick={() => { ui.showInbox(); void mail.selectFolder(folder.id); }}
           title={collapsed ? name : undefined}
         >
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
@@ -70,6 +75,20 @@
       {/each}
     </div>
 
+    <button class="item" aria-expanded={moreOpen} onclick={() => moreOpen = !moreOpen} title="More folders">
+      <span aria-hidden="true">{moreOpen ? "⌄" : "›"}</span><span class="name">More</span>
+    </button>
+    {#if moreOpen}
+      <div class="section">
+        {#each otherFolders as folder (folder.id)}
+          <button class="item" class:selected={!ui.homeOpen && mail.selectedFolderId === folder.id}
+            onclick={() => { ui.showInbox(); void mail.selectFolder(folder.id); }} title={folderLabel(folder)}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d={folderIcon(folder.role)} /></svg>
+            <span class="name">{folderLabel(folder)}</span>
+            {#if folder.unreadCount > 0 && showsUnread(folder.role)}<span class="count">{folder.unreadCount}</span>{/if}
+          </button>
+        {/each}
+      </div>
     {#if labels.length > 0}
       <div class="section">
         <div class="microlabel heading">{ownHeading}</div>
@@ -78,7 +97,7 @@
           <button
             class="item"
             class:selected={mail.selectedFolderId === folder.id}
-            onclick={() => mail.selectFolder(folder.id)}
+            onclick={() => { ui.showInbox(); void mail.selectFolder(folder.id); }}
             style="--depth: {Math.min(depth, 3)}"
             title={collapsed || path !== label ? path : undefined}
           >
@@ -91,6 +110,7 @@
           </button>
         {/each}
       </div>
+    {/if}
     {/if}
   </div>
 

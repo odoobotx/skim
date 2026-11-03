@@ -9,12 +9,18 @@
     checked = false,
     onselect,
     ontoggle,
+    ondone,
+    ondonepointer,
+    completing = false,
   }: {
     thread: ThreadRow;
     selected?: boolean;
     checked?: boolean;
     onselect?: (id: number) => void;
     ontoggle?: (extend: boolean) => void;
+    ondone?: () => void;
+    ondonepointer?: (event: PointerEvent) => void;
+    completing?: boolean;
   } = $props();
 
   // Which mailbox this row came from — shown only in the unified view, where
@@ -39,7 +45,12 @@
      nest inside a button. It sits at the end of the date line, where the row
      already has slack — a leading column would indent the subject and snippet
      on every row forever, to pay for something wanted only now and then. -->
-<div class="row-wrap" class:unread={!thread.isRead} class:selected class:checked>
+<div class="row-wrap" class:unread={!thread.isRead} class:selected class:checked class:completed={thread.isDone || completing}>
+  {#if ondone}
+    <button class="done-check" data-done-ids={thread.messageId ?? thread.id} aria-label={thread.isDone ? "Mark Undone" : "Mark Done"}
+      aria-pressed={thread.isDone || completing} onpointerdown={ondonepointer}
+      onclick={(event) => { if (event.detail === 0) ondone?.(); }}>✓</button>
+  {/if}
   <button
     class="check"
     aria-label={t("select.toggle")}
@@ -71,6 +82,12 @@
 </div>
 
 <style>
+  .done-check { position:absolute; left:8px; top:50%; transform:translateY(-50%); z-index:2; width:26px; height:28px; border-radius:8px; opacity:0; color:var(--text-dim); touch-action:none; }
+  .row-wrap:hover .done-check, .done-check:focus-visible, .completed .done-check { opacity:1; }
+  .done-check:hover { background:color-mix(in srgb,#749f9a 20%,transparent); color:#749f9a; }
+  .completed .row { opacity:.48; }
+  .row-wrap:has(.done-check) .row { padding-left:42px; }
+  @media(hover:none) { .done-check { opacity:1; } }
   /* Only a positioning context for the checkbox: the row button below still
      draws the whole row, so its height and hairline are untouched. */
   .row-wrap {

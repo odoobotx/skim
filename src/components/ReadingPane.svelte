@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { aiErrorText, aiStream, api, errorMessage } from "../lib/api";
+  import { aiErrorText, aiStream, api, errorMessage, reportError } from "../lib/api";
   import { getLocale, t } from "../lib/i18n/index.svelte";
   import { ai } from "../lib/stores/ai.svelte";
   import { aiSessions } from "../lib/stores/aiSession.svelte";
@@ -235,7 +235,7 @@
     const id = mail.selectedThreadId;
     if (id === null) return null;
     const row = mail.selectedThread;
-    return `${id}:${row?.messageCount ?? 0}:${row?.date ?? 0}`;
+    return `${id}:${row?.messageCount ?? 0}:${row?.date ?? 0}:${row?.pendingMove ?? false}`;
   });
 
   $effect(() => {
@@ -398,6 +398,13 @@
 
   function archive() {
     if (!detail) return;
+    if (mail.selectedFolder?.role === "inbox" && mail.selectedThread) {
+      void mail.setDone(mail.selectedThread, !mail.selectedThread.isDone).catch(error => {
+        reportError("inbox.done", error);
+        mail.noteError(t("ops.failed"));
+      });
+      return;
+    }
     const threadId = detail.id;
     const ids = allIds;
     mail.removeThreadFromList(threadId);

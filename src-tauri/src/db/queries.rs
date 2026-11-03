@@ -20,6 +20,15 @@ pub fn insert_message(
 ) -> rusqlite::Result<Option<(i64, i64)>> {
     let tx = conn.transaction()?;
 
+    if let Some((id, thread)) = super::tasks::adopt(&tx, msg)? {
+        tx.execute(
+            "UPDATE messages SET list_id=?2,auto_submitted=?3,precedence=?4 WHERE id=?1",
+            params![id, msg.list_id, msg.auto_submitted, msg.precedence],
+        )?;
+        tx.commit()?;
+        return Ok(Some((id, thread)));
+    }
+
     let exists: bool = tx
         .prepare_cached("SELECT 1 FROM messages WHERE folder_id = ?1 AND uid = ?2")?
         .exists(params![msg.folder_id, msg.uid])?;
@@ -81,6 +90,10 @@ pub fn insert_message(
         msg.auth_dmarc,
     ])?;
     let message_pk = tx.last_insert_rowid();
+    tx.execute(
+        "UPDATE messages SET list_id=?2,auto_submitted=?3,precedence=?4 WHERE id=?1",
+        params![message_pk, msg.list_id, msg.auto_submitted, msg.precedence],
+    )?;
 
     {
         let mut stmt =

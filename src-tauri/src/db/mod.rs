@@ -4,6 +4,7 @@ pub mod draft_attachments;
 pub mod drafts;
 pub mod models;
 pub mod queries;
+pub mod tasks;
 
 use crate::error::{Result, SkimError};
 use rusqlite::Connection;
@@ -27,6 +28,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0014_thread_folder_index.sql"),
     include_str!("migrations/0015_account_imap_user.sql"),
     include_str!("migrations/0016_redecode_cjk.sql"),
+    include_str!("migrations/0017_task_inbox.sql"),
 ];
 
 /// A read the user is waiting on has this long to answer before it is worth

@@ -1,6 +1,7 @@
 use crate::db::models::{
     Folder, InviteView, RenderedBody, ThreadDetail, ThreadRow, TranslateState,
 };
+use crate::db::tasks;
 use crate::db::{bodies, queries};
 use crate::error::{Result, SkimError};
 use crate::mail::{ics, lang, sanitize, suspicion};
@@ -120,6 +121,86 @@ pub async fn list_threads(
             queries::list_threads(conn, folder_id, offset, limit.clamp(1, 200))
         })
         .await
+}
+
+#[tauri::command]
+pub async fn list_task_inbox(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+    show_done: bool,
+    grouped: bool,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<tasks::TaskRow>> {
+    state
+        .db
+        .read("list_task_inbox", move |conn| {
+            tasks::list_inbox(
+                conn,
+                account_id.as_deref(),
+                show_done,
+                grouped,
+                offset.max(0),
+                limit.clamp(1, 500),
+            )
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn set_thread_done(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    thread_id: i64,
+    message_id: Option<i64>,
+    done: bool,
+) -> Result<()> {
+    let ids = state
+        .db
+        .read("task_message_ids", move |conn| {
+            tasks::task_ids(
+                conn,
+                &[thread_id],
+                &message_id.into_iter().collect::<Vec<_>>(),
+                done,
+            )
+        })
+        .await?;
+    cached_move(&app, state.inner(), ids, done).await
+}
+
+#[tauri::command]
+pub async fn set_tasks_done(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    thread_ids: Vec<i64>,
+    message_ids: Vec<i64>,
+    done: bool,
+) -> Result<()> {
+    let ids = state
+        .db
+        .read("task_message_ids", move |conn| {
+            tasks::task_ids(conn, &thread_ids, &message_ids, done)
+        })
+        .await?;
+    cached_move(&app, state.inner(), ids, done).await
+}
+
+async fn cached_move(app: &AppHandle, state: &AppState, ids: Vec<i64>, done: bool) -> Result<()> {
+    let accounts = state
+        .db
+        .call(move |conn| tasks::set_done(conn, &ids, done))
+        .await?;
+    let engines = state.engines.lock().await;
+    for id in accounts {
+        if let Some(engine) = engines.get(&id) {
+            engine.run_ops();
+        }
+    }
+    let _ = app.emit("mail:updated", json!({}));
+    let _ = app.emit("folders:updated", json!({}));
+    crate::badge::refresh(app).await;
+    Ok(())
 }
 
 /// Flat (ungrouped) folder view: one row per message, newest first.
@@ -494,6 +575,18 @@ async fn queue_op(
         .db
         .call(move |conn| {
             // Resolve coordinates BEFORE the optimistic mutation removes rows.
+            if kind != "set_flag" {
+                for id in &ids {
+                    let pending: bool = conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1 AND local_move=1)",
+                        [id],
+                        |r| r.get(0),
+                    )?;
+                    if pending {
+                        return Err(rusqlite::Error::InvalidQuery);
+                    }
+                }
+            }
             let groups = bodies::resolve_uids(conn, &ids)?;
             let mut accounts = Vec::new();
             for g in &groups {
@@ -572,15 +665,7 @@ pub async fn archive_messages(
     state: State<'_, AppState>,
     message_ids: Vec<i64>,
 ) -> Result<()> {
-    queue_op(
-        &app,
-        state.inner(),
-        message_ids,
-        "archive",
-        json!({}),
-        bodies::remove_messages_local,
-    )
-    .await
+    cached_move(&app, state.inner(), message_ids, true).await
 }
 
 #[tauri::command]
@@ -866,7 +951,18 @@ pub async fn move_messages(
     let ids = message_ids.clone();
     let (accounts, sources) = state
         .db
-        .call(move |conn| message_origin(conn, &ids))
+        .call(move |conn| {
+            for id in &ids {
+                let pending: bool =
+                    conn.query_row("SELECT local_move FROM messages WHERE id=?1", [id], |r| {
+                        r.get(0)
+                    })?;
+                if pending {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+            }
+            message_origin(conn, &ids)
+        })
         .await?;
     let account_id = match accounts.as_slice() {
         [only] => only.clone(),

@@ -25,6 +25,7 @@ export type MoveRequest = { rowKeys: number[]; messageIds: number[] };
 export type FolderEdit = { id: number; name: string };
 
 const state = $state({
+  homeOpen: true,
   /** Warm (quiet-zine) vs cold (classic) neutrals. */
   temperature: "warm" as Temperature,
   lightness: "light" as Lightness,
@@ -78,6 +79,11 @@ function applyTheme() {
 applyTheme();
 
 export const ui = {
+  get homeOpen() { return state.homeOpen; },
+  showHome() {
+    state.homeOpen = true;
+  },
+  showInbox() { state.homeOpen = false; },
   get temperature() {
     return state.temperature;
   },

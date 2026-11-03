@@ -26,7 +26,7 @@ export function parseSenderRules(value?: string): SenderRules {
       if (typeof priority !== "boolean" && !["mail", "notifications", "newsletters"].includes(category ?? "")) continue;
       rules[address.trim().toLowerCase()] = {
         priority: priority === true,
-        category: ["mail", "notifications", "newsletters"].includes(category ?? "") ? category : "mail",
+        category: ["mail", "notifications", "newsletters"].includes(category ?? "") ? category : undefined,
       };
     }
     return rules;
@@ -55,9 +55,8 @@ export function groupInbox(rows: ThreadRow[], mode: GroupBy): InboxGroup[] {
   return [...groups.values()];
 }
 
-/** Categories are explicit sender rules for now. Guessing from subjects would
- * bury personal mail; automatic classification needs reliable header signals. */
+/** Explicit sender corrections override the backend's header classification. */
 export function inboxSection(row: ThreadRow, rules: SenderRules): "priority" | Category {
   const rule = Object.hasOwn(rules, senderAddress(row)) ? rules[senderAddress(row)] : undefined;
-  return rule?.priority ? "priority" : rule?.category ?? "mail";
+  return rule?.priority ? "priority" : rule?.category ?? row.category ?? "mail";
 }

@@ -741,7 +741,7 @@ impl Engine {
             .db
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, uid, size FROM messages WHERE id = ?1 AND body_state = 0",
+                    "SELECT id, uid, size FROM messages WHERE id = ?1 AND body_state = 0 AND local_move=0",
                 )?;
                 let mut rows = Vec::new();
                 for pk in pks {
@@ -901,20 +901,40 @@ impl Engine {
             .call(move |conn| queries::list_folders(conn, &account_id))
             .await?;
 
+        let show_done = self
+            .db
+            .read("show_done_sync", |conn| {
+                Ok(queries::get_setting(conn, "inbox_show_done")?.as_deref() == Some("on"))
+            })
+            .await?;
+        let pending = self
+            .db
+            .read("pending_move_folders", |conn| {
+                let mut stmt = conn.prepare("SELECT DISTINCT expected_folder FROM cached_moves")?;
+                let ids = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<std::result::Result<Vec<i64>, _>>()?;
+                Ok(ids)
+            })
+            .await?;
+
         let started = std::time::Instant::now();
         let total = folders.len();
         let mut synced = 0usize;
         let mut skipped = 0usize;
         let mut any_changes = false;
         for folder in folders {
-            if folder.role.as_deref() == Some("all") {
+            if folder.role.as_deref() == Some("all") && !show_done && !pending.contains(&folder.id)
+            {
                 continue;
             }
 
             // A cheap STATUS probe gates the expensive SELECT + flag fetch:
             // skip folders that report the same snapshot as the last pass. IMAP
             // forbids STATUS on the selected mailbox, so that one always syncs.
-            let probe = if self.selected.as_deref() == Some(&folder.imap_name) {
+            let probe = if self.selected.as_deref() == Some(&folder.imap_name)
+                || pending.contains(&folder.id)
+            {
                 None
             } else {
                 match self.probe_status(&folder.imap_name).await {
@@ -944,6 +964,15 @@ impl Engine {
 
             match self.sync_folder(folder.id, &folder.imap_name).await {
                 Ok(changed) => {
+                    if pending.contains(&folder.id) {
+                        self.bind_cached_copies(folder.id, &folder.imap_name)
+                            .await?;
+                        self.db
+                            .call(move |conn| {
+                                crate::db::tasks::cleanup_unidentified(conn, folder.id)
+                            })
+                            .await?;
+                    }
                     synced += 1;
                     any_changes |= changed;
                     if let Some(st) = probe {
@@ -1208,7 +1237,8 @@ impl Engine {
                 let ops_pending: bool = tx.query_row(
                     "SELECT EXISTS (SELECT 1 FROM pending_ops
                                     WHERE account_id = ?1 AND state = 'pending'
-                                      AND kind IN ('move', 'rename_folder', 'delete_folder'))",
+                                      AND kind IN ('move', 'restore', 'archive', 'rename_folder', 'delete_folder'))
+                     OR EXISTS (SELECT 1 FROM cached_moves c JOIN messages m ON m.id=c.message_id WHERE m.account_id=?1)",
                     rusqlite::params![account_id],
                     |r| r.get(0),
                 )?;
@@ -1262,28 +1292,6 @@ impl Engine {
                 })
                 .await?;
             let _ = self.app.emit("mail:updated", json!({}));
-        }
-
-        // A folder can gain the 'all' role after its contents were already
-        // synced (e.g. the attribute was missed on an earlier run) — those
-        // rows shadow every other folder, so drop them.
-        let account_id = self.account.id.clone();
-        let stale_all: Vec<i64> = self
-            .db
-            .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT f.id FROM folders f
-                     WHERE f.account_id = ?1 AND f.role = 'all'
-                       AND EXISTS (SELECT 1 FROM messages m WHERE m.folder_id = f.id)",
-                )?;
-                let ids = stmt
-                    .query_map(rusqlite::params![account_id], |r| r.get(0))?
-                    .collect::<std::result::Result<Vec<i64>, _>>()?;
-                Ok(ids)
-            })
-            .await?;
-        for folder_id in stale_all {
-            wipe_folder(&self.db, folder_id).await?;
         }
 
         let _ = self.app.emit("folders:updated", json!({}));
@@ -1407,7 +1415,7 @@ impl Engine {
         let max_uid: Option<i64> = db
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT max(uid) FROM messages WHERE folder_id = ?1",
+                    "SELECT max(uid) FROM messages WHERE folder_id = ?1 AND local_move=0",
                     rusqlite::params![folder_id],
                     |r| r.get(0),
                 )
@@ -1515,7 +1523,7 @@ impl Engine {
             .db
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT COUNT(*) FROM messages WHERE folder_id = ?1",
+                    "SELECT COUNT(*) FROM messages WHERE folder_id = ?1 AND local_move=0",
                     rusqlite::params![folder_id],
                     |r| r.get(0),
                 )
@@ -1625,7 +1633,7 @@ impl Engine {
             .call(move |conn| {
                 let mut stmt = conn.prepare_cached(
                     "SELECT id, uid, is_read, is_starred FROM messages
-                     WHERE folder_id = ?1 ORDER BY uid DESC LIMIT 500",
+                     WHERE folder_id = ?1 AND local_move=0 ORDER BY uid DESC LIMIT 500",
                 )?;
                 let rows = stmt
                     .query_map(rusqlite::params![folder_id], |r| {
@@ -1749,7 +1757,7 @@ impl Engine {
                 conn.query_row(
                     "SELECT f.imap_name, m.uid
                      FROM messages m JOIN folders f ON f.id = m.folder_id
-                     WHERE m.id = ?1",
+                     WHERE m.id = ?1 AND m.local_move=0",
                     rusqlite::params![message_pk],
                     |r| Ok((r.get(0)?, r.get(1)?, state.unwrap_or(0))),
                 )
@@ -1935,6 +1943,17 @@ impl Engine {
             match self.execute_op(&kind, &parsed).await {
                 Ok(folder_ids) => {
                     affected.extend(folder_ids);
+                    let cache_payload = parsed.clone();
+                    if let Err(error) = self
+                        .db
+                        .call(move |conn| {
+                            crate::db::tasks::finish_cached(conn, &cache_payload, true)
+                        })
+                        .await
+                    {
+                        tracing::warn!(%error,"cannot confirm cached move; retaining journal for retry");
+                        break;
+                    }
                     let _ = self.finish_op(op_id, true).await;
                 }
                 Err(e) => {
@@ -1945,6 +1964,20 @@ impl Engine {
                         "network" | "tls" | "oauth" => break,
                         _ => {
                             if attempts + 1 >= 5 {
+                                let cache_payload = parsed.clone();
+                                if let Err(error) = self
+                                    .db
+                                    .call(move |conn| {
+                                        crate::db::tasks::finish_cached(conn, &cache_payload, false)
+                                    })
+                                    .await
+                                {
+                                    tracing::warn!(%error,"cannot restore failed cached move; retaining journal for retry");
+                                    break;
+                                }
+                                if let Some(folder) = parsed["folderId"].as_i64() {
+                                    affected.insert(folder);
+                                }
                                 let _ = self.finish_op(op_id, false).await;
                                 // A permanently failed RSVP must not keep showing
                                 // the optimistic "accepted" pill: drop the stored
@@ -2055,9 +2088,47 @@ impl Engine {
                 })
                 .await;
             if let Ok(name) = name {
-                let _ = self.sync_folder(folder_id, &name).await;
+                if self.sync_folder(folder_id, &name).await.is_ok() {
+                    if self.bind_cached_copies(folder_id, &name).await.is_ok() {
+                        let _ = self
+                            .db
+                            .call(move |conn| {
+                                crate::db::tasks::cleanup_unidentified(conn, folder_id)
+                            })
+                            .await;
+                    }
+                }
             }
         }
+    }
+
+    async fn bind_cached_copies(&mut self, folder: i64, name: &str) -> Result<()> {
+        let keys=self.db.read("pending_move_keys",move|conn|{
+            let mut stmt=conn.prepare("SELECT DISTINCT m.message_id FROM messages m JOIN cached_moves c ON c.message_id=m.id WHERE c.expected_folder=?1 AND c.confirmed=1 AND m.message_id IS NOT NULL")?;
+            let keys=stmt.query_map([folder],|r|r.get(0))?.collect::<std::result::Result<Vec<String>,_>>()?;
+            Ok(keys)
+        }).await?;
+        if keys.is_empty() {
+            return Ok(());
+        }
+        self.ensure_selected(name).await?;
+        for key in keys {
+            // Message-IDs come from untrusted mail, not generated draft IDs.
+            if key.chars().any(|c| c.is_control()) {
+                continue;
+            }
+            let uids = self
+                .session()
+                .await?
+                .uid_search(format!("HEADER MESSAGE-ID {}", quote_mailbox(&key)))
+                .await
+                .map_err(imap_err)?;
+            let uids: Vec<u32> = uids.into_iter().collect();
+            for set in uid_sets(&uids) {
+                self.fetch_headers(folder, &set, true, 0).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn finish_op(&self, op_id: i64, success: bool) -> Result<()> {
@@ -2152,7 +2223,13 @@ impl Engine {
                     self.delete_and_expunge(&uids).await?;
                 } else {
                     let dest = self.role_folder("archive", "Archive").await?;
+                    if payload["createDest"].as_bool().unwrap_or(false) {
+                        let _ = self.session().await?.create(&dest).await;
+                    }
                     self.move_uids(&uids, &dest).await?;
+                }
+                if let Some(dest) = payload["destFolderId"].as_i64() {
+                    affected.push(dest);
                 }
             }
             "delete" => {
@@ -2176,7 +2253,7 @@ impl Engine {
             // destination travels in the payload rather than being resolved from
             // a role here, so the op stays self-describing however long it waits
             // in the queue.
-            "move" => {
+            "move" | "restore" => {
                 let dest = payload["destImapName"].as_str().unwrap_or_default();
                 // Nothing to do without a destination, or when the mail is
                 // already there.
@@ -2190,7 +2267,18 @@ impl Engine {
                             tracing::debug!(error = %e, folder = %dest, "CREATE failed; moving anyway");
                         }
                     }
-                    self.move_uids(&uids, dest).await?;
+                    if kind == "restore" && self.account.provider == "gmail" {
+                        // Restoring Gmail mail adds INBOX; never delete its All Mail copy.
+                        for set in uid_sets(&uids) {
+                            self.session()
+                                .await?
+                                .uid_copy(&set, quote_mailbox(dest))
+                                .await
+                                .map_err(imap_err)?;
+                        }
+                    } else {
+                        self.move_uids(&uids, dest).await?;
+                    }
                     if let Some(dest_folder_id) = payload["destFolderId"].as_i64() {
                         affected.push(dest_folder_id);
                     }
@@ -2832,11 +2920,11 @@ async fn wipe_folder(db: &Db, folder_id: i64) -> Result<()> {
         };
         tx.execute(
             "DELETE FROM messages_fts WHERE rowid IN
-               (SELECT id FROM messages WHERE folder_id = ?1)",
+               (SELECT id FROM messages WHERE folder_id = ?1 AND local_move=0)",
             rusqlite::params![folder_id],
         )?;
         tx.execute(
-            "DELETE FROM messages WHERE folder_id = ?1",
+            "DELETE FROM messages WHERE folder_id = ?1 AND local_move=0",
             rusqlite::params![folder_id],
         )?;
         for tid in thread_ids {

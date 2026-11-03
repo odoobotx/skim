@@ -21,6 +21,7 @@ const state = $state({
   selectedThreadId: null as number | null,
   selectedMessageId: null as number | null,
   groupThreads: true,
+  showDone: false,
   syncState: "idle" as SyncState,
   syncMessage: null as string | null,
   syncProgress: null as { done: number; total: number } | null,
@@ -304,6 +305,9 @@ async function openLocation(folderId: number, threadId: number | null, messageId
 /** One page of rows for a folder — threads when grouping is on, else messages.
  *  Negative ids are virtual (cross-account) folders, addressed by role/label. */
 function fetchPage(folderId: number, offset: number, limit = PAGE): Promise<ThreadRow[]> {
+  if (state.folders.find(folder => folder.id === folderId)?.role === "inbox") {
+    return api.listTaskInbox(isUnified() ? null : state.activeAccountId, state.showDone, state.groupThreads, offset, limit);
+  }
   if (folderId < 0) {
     const virtual = state.folders.find((f) => f.id === folderId);
     if (!virtual) return Promise.resolve([]);
@@ -336,6 +340,7 @@ async function refreshThreads() {
   );
   const rows = await guard(() => fetchPage(folderId, 0, depth));
   if (rows === null) return;
+  if (state.selectedFolderId !== folderId) return;
   shown(rows);
   pruneSelection();
 }
@@ -519,6 +524,30 @@ export const mail = {
   get groupThreads() {
     return state.groupThreads;
   },
+  get showDone() { return state.showDone; },
+  async setShowDone(on: boolean) {
+    if (state.showDone === on) return;
+    state.showDone = on;
+    clearSelection();
+    await api.setSetting("inbox_show_done", on ? "on" : "off");
+    await refreshThreads();
+    if (on) void api.syncNow(activeAccount()?.id).catch(() => {});
+  },
+  async setDone(row: ThreadRow, done: boolean) {
+    await this.setDoneRows([row], done);
+  },
+  async setDoneRows(rows: ThreadRow[], done: boolean) {
+    const keys = new Set(rows.map(rowKey));
+    state.threads = state.threads.flatMap(row => keys.has(rowKey(row))
+      ? done && !state.showDone ? [] : [{ ...row, isDone: done, pendingMove: true }] : [row]);
+    try {
+      await api.setTasksDone(rows, done);
+    } catch (error) {
+      await refreshThreads();
+      throw error;
+    }
+    await refreshThreads();
+  },
   get selectedFolder() {
     return state.folders.find((f) => f.id === state.selectedFolderId) ?? null;
   },
@@ -598,6 +627,7 @@ export const mail = {
     // Thread grouping preference (default on when the key is absent).
     const settings = await api.getSettings();
     state.groupThreads = settings.group_threads !== "off";
+    state.showDone = settings.inbox_show_done === "on";
     state.accounts = await api.listAccounts();
     // Restore the last scope; self-heal a stale id. With 2+ mailboxes the
     // unified view is the default — a concrete saved choice is respected,

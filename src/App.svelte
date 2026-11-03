@@ -1,6 +1,7 @@
 <script lang="ts">
   import Titlebar from "./components/Titlebar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
+  import Home from "./components/Home.svelte";
   import MessageList from "./components/MessageList.svelte";
   import ReadingPane from "./components/ReadingPane.svelte";
   import ComposeForm from "./components/ComposeForm.svelte";
@@ -245,6 +246,10 @@
     }
     const thread = mail.selectedThread;
     if (!thread) return;
+    if (action === "archive" && mail.selectedFolder?.role === "inbox") {
+      await mail.setDone(thread, !thread.isDone);
+      return;
+    }
     const ids = await api.threadMessageIds(thread.id);
     if (ids.length === 0) return;
     switch (action) {
@@ -471,6 +476,9 @@
     {#if !needsOnboarding}
       <main class="panes">
         <Sidebar />
+        {#if ui.homeOpen}
+          <Home />
+        {:else}
         <MessageList />
         {#if mail.selectedFolder?.role === "drafts" && draftEditorId !== null}
           {#key draftEditorId}
@@ -493,8 +501,9 @@
               onpopout={() => popOutRecap(recap)}
             />
           {/if}
-        {:else}
+        {:else if mail.selectedThreadId !== null}
           <ReadingPane />
+        {/if}
         {/if}
       </main>
       {#if expandedAsk}

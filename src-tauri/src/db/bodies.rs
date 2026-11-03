@@ -393,7 +393,7 @@ pub fn resolve_uids(conn: &Connection, message_ids: &[i64]) -> rusqlite::Result<
     let mut stmt = conn.prepare_cached(
         "SELECT m.folder_id, m.account_id, f.imap_name, m.uid
          FROM messages m JOIN folders f ON f.id = m.folder_id
-         WHERE m.id = ?1",
+         WHERE m.id = ?1 AND m.local_move=0",
     )?;
     for id in message_ids {
         let row: Option<(i64, String, String, u32)> = stmt
@@ -434,6 +434,15 @@ pub fn set_flag_local(
     for id in message_ids {
         tx.execute(
             &format!("UPDATE messages SET {column} = ?2 WHERE id = ?1"),
+            params![id, on],
+        )?;
+        let override_column = if flag == "seen" {
+            "read_override"
+        } else {
+            "star_override"
+        };
+        tx.execute(
+            &format!("UPDATE cached_moves SET {override_column}=?2 WHERE message_id=?1"),
             params![id, on],
         )?;
         let row: Option<(Option<i64>, i64)> = tx

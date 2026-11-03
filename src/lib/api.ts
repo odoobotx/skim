@@ -58,6 +58,14 @@ export const api = {
   folderAccountId: (folderId: number) => invoke<string>("folder_account_id", { folderId }),
   listThreads: (folderId: number, offset = 0, limit = 100) =>
     invoke<ThreadRow[]>("list_threads", { folderId, offset, limit }),
+  listTaskInbox: (accountId: string | null, showDone: boolean, grouped: boolean, offset = 0, limit = 100) =>
+    invoke<ThreadRow[]>("list_task_inbox", { accountId, showDone, grouped, offset, limit }),
+  setThreadDone: (threadId: number, messageId: number | null, done: boolean) =>
+    invoke<void>("set_thread_done", { threadId, messageId, done }),
+  setTasksDone: (rows: ThreadRow[], done: boolean) => invoke<void>("set_tasks_done", {
+    threadIds: [...new Set(rows.map(row => row.id))],
+    messageIds: rows.flatMap(row => row.messageId == null ? [] : [row.messageId]), done,
+  }),
   listMessages: (folderId: number, offset = 0, limit = 100) =>
     invoke<ThreadRow[]>("list_messages", { folderId, offset, limit }),
   listUnifiedFolders: () => invoke<Folder[]>("list_unified_folders"),

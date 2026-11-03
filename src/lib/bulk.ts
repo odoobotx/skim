@@ -32,6 +32,11 @@ async function messageIdsFor(rows: ThreadRow[]): Promise<number[]> {
 export async function bulkAct(action: BulkAction): Promise<void> {
   const rows = mail.selectedRows;
   if (rows.length === 0) return;
+  if (action === "archive" && mail.selectedFolder?.role === "inbox") {
+    await mail.setDoneRows(rows, true);
+    mail.clearSelection();
+    return;
+  }
   const keys = rows.map(rowKey);
   // Resolve before the optimistic removal — `selectedRows` reads the live list.
   const ids = await messageIdsFor(rows);
