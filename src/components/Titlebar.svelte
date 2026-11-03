@@ -4,6 +4,7 @@
   import { mail, UNIFIED } from "../lib/stores/mail.svelte";
 
   const inTauri = "__TAURI_INTERNALS__" in window;
+  const browserPreview = (window as unknown as { __TAURI_INTERNALS__?: { demo?: boolean } }).__TAURI_INTERNALS__?.demo === true;
 
   let maximized = $state(false);
 
@@ -65,7 +66,7 @@
 
 <svelte:window onmousedown={onWindowMousedown} onkeydown={onWindowKeydown} />
 
-<header class="titlebar" data-tauri-drag-region>
+<header class="titlebar" class:browser-preview={browserPreview} data-tauri-drag-region>
   <div class="brand" data-tauri-drag-region bind:this={brandEl}>
     <span class="logo" data-tauri-drag-region>{t("app.name")}</span>
     {#if mail.accounts.length > 1}

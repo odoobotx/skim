@@ -535,8 +535,10 @@
 </div>
 
 <style>
-  .home-view :global(.titlebar) { position:absolute; inset:0 0 auto; z-index:10; background:linear-gradient(#06151170,transparent); border-bottom-color:transparent; }
-  .home-view :global(.titlebar .logo), .home-view :global(.titlebar .account), .home-view :global(.titlebar .ctl) { color:#fff; }
+  .home-view :global(.titlebar) { position:absolute; inset:0 0 auto; z-index:10; background:transparent; border:0; box-shadow:none; }
+  .home-view :global(.titlebar .brand) { visibility:hidden; }
+  .home-view :global(.titlebar .ctl) { color:#fff; }
+  .home-view :global(.titlebar.browser-preview) { display:none; }
   .app {
     height: 100%;
     display: flex;

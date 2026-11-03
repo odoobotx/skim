@@ -75,7 +75,7 @@
   </div>
   <div class="welcome">
     <h1>{greeting}</h1>
-    <button class="enter" onclick={() => void enter()}>Check Inbox <span aria-hidden="true">↗</span></button>
+    <button class="enter" onclick={() => void enter()}>Check Inbox</button>
     <p class="status">{#if mail.loadFailed || recentFailed}Mail couldn't load. Open Inbox to retry.
       {:else if mail.syncState === "syncing"}Catching up on your mail…
       {:else if unread > 0}{unread.toLocaleString()} unread
