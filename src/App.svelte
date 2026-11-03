@@ -21,7 +21,6 @@
   import { mail, rowKey, UNIFIED } from "./lib/stores/mail.svelte";
   import { palette } from "./lib/stores/palette.svelte";
   import { ui } from "./lib/stores/ui.svelte";
-  import { updater } from "./lib/stores/update.svelte";
   import type { Account, Draft, ThreadRow } from "./lib/types";
 
   /** How long the boot is given to answer before the shell is drawn anyway.
@@ -179,7 +178,7 @@
         } catch {
           // settings are best-effort at boot
         }
-        updater.init(settings);
+        // Fork updates stay disabled until we have our own signed releases.
         // The shell is drawn whatever the mailbox is doing. `boot()` reads a
         // database the startup sync is busy filling, so it can be slow, and if
         // it throws there is nothing later that would ever set `ready` — either
@@ -212,7 +211,7 @@
   }
 
   function moveSelection(delta: number) {
-    const threads = mail.threads;
+    const threads = mail.navigationRows;
     if (threads.length === 0) return;
     // Rows are keyed by thread in grouped mode, by message in flat mode (where
     // several rows can share a thread id).

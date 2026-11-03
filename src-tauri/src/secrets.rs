@@ -6,7 +6,7 @@
 
 use crate::error::{Result, SkimError};
 
-const SERVICE: &str = "Skim";
+const SERVICE: &str = "Skim Tasks";
 
 /// `ERROR_NOT_ENOUGH_MEMORY`. Credential Manager answers a write with this when
 /// the user's vault won't take another entry — its size cap is shared with every

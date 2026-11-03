@@ -33,6 +33,7 @@ const state = $state({
   // Rows ticked for a bulk action, by `rowKey`. Empty means "no selection" and
   // the list shows no selection chrome at all.
   selectedKeys: [] as number[],
+  navigationKeys: null as number[] | null,
   // Where the last tick happened, so Shift+click can extend a range from it.
   anchorKey: null as number | null,
   // Transient notice for a queued op that failed after all retries.
@@ -403,7 +404,7 @@ function pruneSelection() {
 function toggleRow(key: number, extend = false) {
   const anchor = state.anchorKey;
   if (extend && anchor !== null && anchor !== key) {
-    const keys = state.threads.map(rowKey);
+    const keys = navigationRows().map(rowKey);
     const from = keys.indexOf(anchor);
     const to = keys.indexOf(key);
     if (from !== -1 && to !== -1) {
@@ -427,8 +428,17 @@ function toggleRow(key: number, extend = false) {
  *  folder". Skim has no undo, so a bulk action must never reach mail that was
  *  never on screen. */
 function selectAllLoaded() {
-  state.selectedKeys = state.threads.map(rowKey);
+  state.selectedKeys = navigationRows().map(rowKey);
   state.anchorKey = null;
+}
+
+function navigationRows(): ThreadRow[] {
+  if (state.navigationKeys === null) return state.threads;
+  const rows = new Map(state.threads.map(row => [rowKey(row), row]));
+  return state.navigationKeys.flatMap(key => {
+    const row = rows.get(key);
+    return row ? [row] : [];
+  });
 }
 
 /** Toggle thread grouping and reload the current folder in the new mode. */
@@ -478,6 +488,18 @@ export const mail = {
   },
   get threads() {
     return state.threads;
+  },
+  get navigationRows() {
+    return navigationRows();
+  },
+  setNavigationRows(keys: number[] | null) {
+    state.navigationKeys = keys;
+    if (keys !== null) {
+      const visible = new Set(keys);
+      if (state.selectedKeys.some(key => !visible.has(key))) {
+        state.selectedKeys = state.selectedKeys.filter(key => visible.has(key));
+      }
+    }
   },
   get selectedFolderId() {
     return state.selectedFolderId;

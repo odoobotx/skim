@@ -14,11 +14,11 @@ use state::AppState;
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 
-/// Roaming app-data dir (`%APPDATA%\com.skim.app`) — the same place Tauri's
+/// Roaming app-data dir (`%APPDATA%\com.techsystech.skimtasks`) — the same place Tauri's
 /// `app_data_dir()` resolves to on Windows, computed without an `AppHandle` so
 /// the panic hook can reach it before setup runs.
 fn app_data_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("com.skim.app"))
+    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("com.techsystech.skimtasks"))
 }
 
 /// Past this a diagnostic log is old news; the file is started over rather than
@@ -90,8 +90,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // A protocol-activated toast click relaunches Skim with a
-            // `skim://…` argument, forwarded here to the running instance.
-            if let Some(uri) = args.iter().find(|a| a.starts_with("skim://")) {
+            // `skimtasks://…` argument, forwarded here to the running instance.
+            if let Some(uri) = args.iter().find(|a| a.starts_with("skimtasks://")) {
                 notify::handle_skim_uri(app, uri, true);
             } else {
                 // A plain second launch surfaces the running instance (it may
@@ -274,7 +274,7 @@ pub fn run() {
             // Cold start from a toast click: stash the target so the frontend
             // opens it once its listeners attach (via take_pending_open). The
             // running-app case goes through the single-instance handler above.
-            if let Some(uri) = std::env::args().find(|a| a.starts_with("skim://")) {
+            if let Some(uri) = std::env::args().find(|a| a.starts_with("skimtasks://")) {
                 notify::handle_skim_uri(app.handle(), &uri, false);
             }
 

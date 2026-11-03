@@ -6,6 +6,13 @@
 
 import * as db from "./data";
 
+// Used only by headless tests, with this synthetic mailbox.
+export const commandLog: { cmd: string; args: any }[] = [];
+const savedSettings: Record<string, string> = JSON.parse(localStorage.getItem("skimdemo.settings") ?? "{}");
+if (localStorage.getItem("skimdemo.taskInbox") === "on") {
+  db.INBOX_THREADS.push({ ...db.INBOX_THREADS[0], id: 109, subject: "A separate conversation with Anna" });
+}
+
 // The app checks `"__TAURI_INTERNALS__" in window` to decide whether to boot
 // (vs. show onboarding). Presence is enough — our aliased invoke does the work.
 (globalThis as any).window && ((window as any).__TAURI_INTERNALS__ ||= { demo: true });
@@ -137,6 +144,8 @@ function handleAi(cmd: string, args: any): void {
 
 // ---- Plain command surface ----------------------------------------------
 export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
+  commandLog.push({ cmd, args });
+  if (commandLog.length > 500) commandLog.shift();
   if (AI_COMMANDS.has(cmd)) {
     handleAi(cmd, args);
     return Promise.resolve(undefined as T);
@@ -164,9 +173,11 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       try {
         theme = (globalThis as any).localStorage?.getItem("skimdemo.theme") || "warm-light";
       } catch {}
-      return ok({ locale: "en", theme, images_policy: "ask", group_threads: "on" });
+      return ok({ locale: "en", theme, images_policy: "ask", group_threads: "on", ...savedSettings });
     }
     case "set_setting":
+      savedSettings[args.key] = args.value;
+      localStorage.setItem("skimdemo.settings", JSON.stringify(savedSettings));
       return ok(undefined);
 
     // mail
@@ -186,10 +197,18 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       const list = db.THREADS_BY_FOLDER[args.folderId] ?? [];
       return ok(args.offset > 0 ? [] : list);
     }
-    case "get_thread":
-      return ok(db.threadDetail(args.threadId));
+    case "get_thread": {
+      const detail = db.threadDetail(args.threadId);
+      if (localStorage.getItem("skimdemo.taskInbox") === "on" && detail.messages.length) {
+        detail.messages.push({ ...detail.messages[0], id: 99999, folderId: 3 });
+      }
+      return ok(detail);
+    }
     case "get_message_body":
       return ok(db.renderedBody(args.messageId));
+    case "archive_messages":
+      if (localStorage.getItem("skimdemo.failArchive") === "on") return Promise.reject(new Error("Synthetic archive failure"));
+      return ok(undefined);
     case "thread_message_ids":
       return ok([args.threadId * 10 + 1]);
     case "thread_message_ids_bulk":

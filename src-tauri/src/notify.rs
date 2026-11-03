@@ -11,8 +11,8 @@ use windows::core::HSTRING;
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 
-const AUMID: &str = "com.skim.app";
-const URL_SCHEME: &str = "skim";
+const AUMID: &str = "com.techsystech.skimtasks";
+const URL_SCHEME: &str = "skimtasks";
 
 /// Where the toast icon lives. The notification platform silently drops
 /// images under hidden directories — the whole AppData tree included — so
@@ -21,7 +21,7 @@ pub fn toast_icon_path() -> Option<std::path::PathBuf> {
     let home = std::env::var("USERPROFILE").ok()?;
     Some(
         std::path::Path::new(&home)
-            .join(".skim")
+            .join(".skimtasks")
             .join("notify-icon.png"),
     )
 }
@@ -58,13 +58,13 @@ pub fn register_aumid() {
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if let Ok((key, _)) = hkcu.create_subkey(format!(r"Software\Classes\AppUserModelId\{AUMID}")) {
-        let _ = key.set_raw_value("DisplayName", &expand_sz("Skim"));
+        let _ = key.set_raw_value("DisplayName", &expand_sz("Skim Tasks"));
         let _ = key.set_raw_value("IconUri", &expand_sz(&icon_path.to_string_lossy()));
     }
 }
 
-/// Register the `skim:` URL scheme so protocol-activated toasts (and any
-/// `skim://…` link) launch the app with the URI as its argument. Toast body
+/// Register the `skimtasks:` URL scheme so protocol-activated toasts (and any
+/// `skimtasks://…` link) launch the app with the URI as its argument. Toast body
 /// and button clicks use `activationType="protocol"`, which the shell routes
 /// here — no COM activator or in-process message pump required (the reason
 /// the previous in-process `on_activated` callback never fired).
@@ -79,7 +79,7 @@ pub fn register_url_scheme() {
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if let Ok((key, _)) = hkcu.create_subkey(format!(r"Software\Classes\{URL_SCHEME}")) {
-        let _ = key.set_value("", &"URL:Skim Protocol");
+        let _ = key.set_value("", &"URL:Skim Tasks Protocol");
         let _ = key.set_value("URL Protocol", &"");
     }
     if let Ok((key, _)) =
@@ -204,15 +204,15 @@ pub async fn notify_new_mail(app: &AppHandle, db: &Db, message_pks: &[i64]) {
         .join(",");
     let open_uri = match open_target {
         Some((folder_id, thread_id, message_id)) => {
-            format!("skim://open?folder={folder_id}&thread={thread_id}&message={message_id}")
+            format!("skimtasks://open?folder={folder_id}&thread={thread_id}&message={message_id}")
         }
-        None => "skim://open".to_string(),
+        None => "skimtasks://open".to_string(),
     };
-    let read_uri = format!("skim://read?ids={ids_csv}");
+    let read_uri = format!("skimtasks://read?ids={ids_csv}");
     let mark_read = mark_read_label(&locale);
 
     // Protocol-activated toast. A body click launches `open_uri`, the button
-    // `read_uri`; Windows shell-launches these through the registered `skim:`
+    // `read_uri`; Windows shell-launches these through the registered `skimtasks:`
     // scheme (register_url_scheme), so no COM activator or in-process message
     // pump is needed — which is why the old in-process callback never fired.
     // The header logo comes from the AUMID (Start Menu shortcut + IconUri),
@@ -272,12 +272,12 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// Route a `skim://…` activation URI into the app. Called from the
+/// Route a `skimtasks://…` activation URI into the app. Called from the
 /// single-instance handler (running app: `frontend_ready = true`) and from
 /// cold-start argv parsing (`frontend_ready = false`, no listener attached
 /// yet — the target is stashed for `take_pending_open`).
 pub fn handle_skim_uri(app: &AppHandle, uri: &str, frontend_ready: bool) {
-    let Some(rest) = uri.strip_prefix("skim://") else {
+    let Some(rest) = uri.strip_prefix("skimtasks://") else {
         return;
     };
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));

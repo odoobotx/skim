@@ -32,6 +32,15 @@ jobs:
       - name: Typecheck frontend
         run: npm run check
 
+      - name: Inbox grouping tests
+        run: npm test
+
+      - name: Install headless test browser
+        run: npx playwright install chromium
+
+      - name: Inbox interaction tests (synthetic mail)
+        run: npm run test:inbox-ui
+
       - name: Build frontend
         run: npm run build
 

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { api, reportError } from "../lib/api";
+  import { parseSenderRules, type SenderRule, type SenderRules } from "../lib/inbox";
   import { folderLabel } from "../lib/folders";
   import { t } from "../lib/i18n/index.svelte";
   import { ai } from "../lib/stores/ai.svelte";
@@ -7,6 +10,37 @@
   import { ui } from "../lib/stores/ui.svelte";
   import MessageRow from "./MessageRow.svelte";
   import SelectionBar from "./SelectionBar.svelte";
+  import OrganizedList from "./OrganizedList.svelte";
+
+  let rules = $state<SenderRules>({});
+  let rulesReady = $state(false);
+  const organized = $derived(["inbox", "sent"].includes(mail.selectedFolder?.role ?? ""));
+  let saveQueue = Promise.resolve();
+
+  onMount(() => {
+    let active = true;
+    void api.getSettings().then(settings => {
+      if (active) rules = parseSenderRules(settings.inbox_sender_rules);
+    }).catch(error => {
+      reportError("inbox.rules.load", error);
+      mail.noteError(t("inbox.rules_failed"));
+    }).finally(() => { if (active) rulesReady = true; });
+    return () => { active = false; };
+  });
+
+  function saveRule(address: string, patch: SenderRule): Promise<void> {
+    mail.clearSelection();
+    mail.selectedThreadId = null;
+    mail.selectedMessageId = null;
+    rules = { ...rules, [address]: { ...rules[address], ...patch } };
+    const value = JSON.stringify(rules);
+    // Serialize writes so a slow earlier save cannot overwrite a later edit.
+    saveQueue = saveQueue.then(() => api.setSetting("inbox_sender_rules", value)).catch(error => {
+      reportError("inbox.rules.save", error);
+      mail.noteError(t("inbox.rules_failed"));
+    });
+    return saveQueue;
+  }
 
   const title = $derived.by(() => {
     const f = mail.selectedFolder;
@@ -144,6 +178,14 @@
           {mail.syncState === "syncing" ? t("sync.syncing") : t("list.empty")}
         {/if}
       </div>
+    {:else if organized}
+      {#if rulesReady}<OrganizedList {rules} {saveRule} />{/if}
+      {#if mail.threads.length >= 100}
+        <button class="load-more" onclick={() => void mail.loadMoreThreads().catch(error => {
+          reportError("inbox.more", error);
+          mail.noteError(t("list.load_failed"));
+        })}>{t("inbox.load_more")}</button>
+      {/if}
     {:else}
       <div class="spacer" style="height: {start * rowH}px"></div>
       {#each visible as thread (thread.messageId ?? thread.id)}
@@ -266,6 +308,7 @@
     overflow-y: auto;
     flex: 1;
   }
+  .load-more { width: 100%; padding: 16px; color: var(--text-dim); font-size: 12px; }
   .empty {
     padding: 48px 16px;
     text-align: center;
