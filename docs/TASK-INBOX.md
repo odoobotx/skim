@@ -5,20 +5,55 @@ The upstream MIT license and attribution remain in place. New behavior belongs
 to this fork; upstream's deliberate exclusion of organizing features does not
 describe this fork's scope.
 
+## Product standard — non-negotiable
+
+The finished client must feel **very polished, elegant, minimal and clean**.
+Every interaction and animation must be thoughtfully designed, reliable and
+fast. Speed is a primary product requirement: **FAST, FAST, FAST — yet smooth,
+never jerky**. Looking good and delivering dependable email behavior are both
+required; neither compensates for failure in the other.
+
+- Give immediate visual feedback for local actions; sync and network latency
+  must not block input or make users wonder whether their click registered.
+- Keep list positions, selection, focus and scroll stable. No surprise reflows,
+  flashing empty states, jumping rows or lost context during drill-downs.
+- Use restrained, purposeful motion. Transitions should preserve continuity,
+  never delay actions; honor reduced-motion preferences.
+- Make menus, spacing, typography, icons, hover/focus states and reading layouts
+  consistent. Avoid redundant controls and visual clutter.
+- Treat pointer, keyboard, drag, cancellation, undo, offline operation, errors
+  and recovery as first-class interactions, not finishing touches.
+- Verify responsiveness with realistic large caches and queued work. Measure
+  UI response and rendering, not only database-query timings. Do not accept
+  visibly jerky or unreliable behavior merely because an isolated test passes.
+
+This is the acceptance bar for the completed product, not a claim that the
+current preview has reached it.
+
 ## Current preview
 
-- Sender grouping across unrelated subjects, with a separate exact-address mode.
+- Opt-in sender grouping: right-click a message or open its sender options, then
+  choose Group by Sender. Rules use the exact normalized address and persist
+  across subjects and accounts; Ungroup Sender reverses the choice.
 - Sender drill-downs within category drill-downs.
 - Priority sender rules, independent of message stars/pins, with a top section.
 - Automatic Notifications/Newsletters classification from headers and sender signals,
   with explicit sender corrections saved in local settings.
 - Full-window nature Home screen with Search, Compose, Check Inbox and recent unread mail.
-- Full-width inbox, compact rows and an Inbox/Sent/Drafts sidebar.
+- Per-account reading layout: Full-width (default), opening an email in place
+  with Back to return, or Split with a persistent list beside the reading pane.
+  The same layout applies inside category and sender drill-downs. All inboxes
+  has its own saved preference. Compact Inbox/Sent/Drafts sidebar.
+- Email Appearance menu explains Original and Match app theme, with keyboard
+  navigation, Escape and outside-click dismissal.
 - Hover/focus Done controls on individual rows and group summaries.
 - Drag across the Done column to stage a stable list, then submit one batch on release.
-- Show Done merges Inbox and received archived mail; clearing Done restores Inbox.
+- Show Done stays available even when Inbox is empty. It merges Inbox and
+  received archived mail; clearing Done restores Inbox without marking unread.
   A new Inbox reply reopens an otherwise completed conversation.
-- Done actions that archive only a conversation's inbox messages using Skim's
+- Done marks the affected inbox messages read locally and queues the server read
+  flag before archiving; the read state follows offline moves and restart.
+  It archives only a conversation's inbox messages using Skim's
   existing offline operation queue. Sent copies remain untouched by this action.
 - Existing unified Inbox and Sent remain available.
 - Keyboard navigation and select-all stay inside the current drill-down.
@@ -102,8 +137,8 @@ Behavior reference: https://sparkmailapp.com/help/manage-your-inbox/mark-as-done
 3. **Recipient/To grouping:** expose recipient metadata through list queries and
    define multi-recipient membership before implementing.
 4. **Pins:** expose a compact pinned group independently from Priority senders.
-5. **Navigation polish:** remembered drill-down scroll positions and persistent
-   grouping mode. Keep secondary controls out of idle rows.
+5. **Navigation polish:** remembered drill-down scroll positions. Keep secondary
+   controls out of idle rows.
 6. **Platform validation:** Windows previews build through CI. Linux requires
    replacing Windows-specific integrations and adding Linux build/testing.
    OAuth registrations and real-account sleep/resume/offline verification remain.
@@ -127,7 +162,8 @@ Synthetic tests cover archive/restore body retention, new reply reopening,
 offline undo, database reopen, failed move rollback, Gmail duplicate copies,
 Sent exclusion, UIDVALIDITY reset, pending read flags, account scope and paging.
 Browser tests cover Home, More, drill-downs, keyboard completion, group completion,
-Show Done/restore, drag batching, failed archive recovery and saved sender rules.
+Show Done in an empty inbox, Done marking read, restore, drag batching, failed
+archive recovery, saved sender rules and account reading layouts.
 
 Performance check on 2026-11-03 (Python SQLite, in-memory copy; query time only):
 100,000 synthetic headers, first 100 grouped rows, about 38 ms Inbox / 89 ms with

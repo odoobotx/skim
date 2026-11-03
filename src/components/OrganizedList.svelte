@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { reportError } from "../lib/api";
-  import { groupInbox, inboxSection, senderAddress, type Category, type GroupBy, type SenderRules } from "../lib/inbox";
+  import { senderGroups, inboxSection, senderAddress, type SenderRule, type SenderRules } from "../lib/inbox";
   import { t } from "../lib/i18n/index.svelte";
   import { mail, rowKey } from "../lib/stores/mail.svelte";
   import type { ThreadRow } from "../lib/types";
@@ -9,9 +9,8 @@
 
   let { rules, saveRule }: {
     rules: SenderRules;
-    saveRule: (address: string, patch: { priority?: boolean; category?: Category }) => Promise<void>;
+    saveRule: (address: string, patch: SenderRule) => Promise<void>;
   } = $props();
-  let mode = $state<GroupBy>("sender");
   let category = $state<string | null>(null);
   let sender = $state<string | null>(null);
   let busy = $state<number[]>([]);
@@ -22,10 +21,11 @@
   let limit = $state(100);
   const displayRows = $derived(sweep.length ? snapshot : mail.threads);
   const priorityRows = $derived(displayRows.filter(row => inboxSection(row, rules) === "priority"));
-  const ordinaryGroups = $derived(groupInbox(displayRows.filter(row => inboxSection(row, rules) === "mail"), mode));
+  const priorityGroups = $derived(senderGroups(priorityRows, rules));
+  const ordinaryGroups = $derived(senderGroups(displayRows.filter(row => inboxSection(row, rules) === "mail"), rules));
   const scoped = $derived(!isInbox || (category === null && sender === null) ? displayRows
     : displayRows.filter(row => inboxSection(row, rules) === (category ?? "mail")));
-  const groups = $derived(groupInbox(scoped, mode));
+  const groups = $derived(senderGroups(scoped, rules));
   const opened = $derived(groups.find(group => group.key === sender));
   const openedRows = $derived(opened?.rows ?? []);
 
@@ -39,7 +39,7 @@
   $effect(() => {
     const rows = sender !== null ? openedRows.slice(0, limit)
       : isInbox && category === null
-        ? [...priorityRows.slice(0, 5), ...ordinaryGroups.slice(0, limit).filter(g => g.rows.length === 1).flatMap(g => g.rows)]
+        ? [...priorityGroups.slice(0,5).filter(g => g.rows.length === 1).flatMap(g => g.rows), ...ordinaryGroups.slice(0, limit).filter(g => g.rows.length === 1).flatMap(g => g.rows)]
         : groups.slice(0, limit).filter(g => g.rows.length === 1).flatMap(g => g.rows);
     mail.setNavigationRows(rows.map(rowKey));
   });
@@ -111,20 +111,47 @@
     void complete(rows, sweepDone);
   }
   function cancel() { pointer = null; sweep = []; snapshot = []; }
+  let menu = $state<{row:ThreadRow;x:number;y:number} | null>(null);
+  let menuEl = $state<HTMLDivElement>();
+  function context(row:ThreadRow,event:MouseEvent) {
+    if (!senderAddress(row)) return;
+    event.preventDefault();
+    const rect=(event.currentTarget as HTMLElement).getBoundingClientRect();
+    menu={row,x:Math.max(8,Math.min(event.clientX || rect.left+20,window.innerWidth-250)),y:Math.max(8,Math.min(event.clientY || rect.top+20,window.innerHeight-325))};
+  }
+  $effect(() => { if (menu) menuEl?.querySelector<HTMLButtonElement>("button")?.focus(); });
+  function dismiss(event:PointerEvent) { if (menu && !menuEl?.contains(event.target as Node)) menu=null; }
+  function menuKey(event:KeyboardEvent) {
+    if (event.key === "Escape") { event.stopPropagation(); menu=null; }
+    if (["ArrowDown","ArrowUp","Home","End"].includes(event.key)) {
+      event.preventDefault();
+      const buttons=[...menuEl!.querySelectorAll<HTMLButtonElement>("button")];
+      const index=buttons.indexOf(document.activeElement as HTMLButtonElement);
+      buttons[event.key === "Home" ? 0 : event.key === "End" ? buttons.length-1 : (index+(event.key === "ArrowDown" ? 1 : buttons.length-1))%buttons.length]?.focus();
+    }
+  }
+  function choose(patch:SenderRule) {
+    const row=menu?.row; menu=null;
+    if (row) { sender=null; void saveRule(senderAddress(row),patch); }
+  }
 </script>
 
-<svelte:window onpointermove={move} onpointerup={finish} onpointercancel={cancel} onblur={cancel} />
+<svelte:window onpointermove={move} onpointerup={finish} onpointercancel={cancel} onblur={() => {cancel();menu=null;}} onpointerdown={dismiss} />
+{#if menu}
+  <div class="sender-menu" role="menu" tabindex="-1" bind:this={menuEl} style:left={`${menu.x}px`} style:top={`${menu.y}px`} onkeydown={menuKey}>
+    <header>{menu.row.fromName}<br />{senderAddress(menu.row)}</header>
+    <button role="menuitem" onclick={() => choose({group: !rules[senderAddress(menu!.row)]?.group})}>{rules[senderAddress(menu.row)]?.group ? "Ungroup Sender" : "Group by Sender"}</button>
+    {#if isInbox}
+      <button role="menuitem" onclick={() => choose({priority: !rules[senderAddress(menu!.row)]?.priority})}>{rules[senderAddress(menu.row)]?.priority ? "Remove Priority sender" : "Make Priority sender"}</button>
+      <div class="section-label">Move sender to</div>
+      <button role="menuitem" onclick={() => choose({category:"mail"})}>People</button>
+      <button role="menuitem" onclick={() => choose({category:"notifications"})}>Notifications</button>
+      <button role="menuitem" onclick={() => choose({category:"newsletters"})}>Newsletters</button>
+    {/if}
+  </div>
+{/if}
 <div bind:this={root} class="organized" class:sweeping={sweep.length > 0}>
 <div class="organize">
-  {#if isInbox}<label class="show-done"><input type="checkbox" checked={mail.showDone}
-    onchange={(event) => void mail.setShowDone(event.currentTarget.checked).catch(error => { reportError("inbox.showDone", error); mail.noteError(t("ops.failed")); })} /> Show Done</label>{/if}
-  <label>{t("inbox.group_by")}
-    <select bind:value={mode} onchange={() => navigate(category)}>
-      <option value="sender">{t("inbox.by_sender")}</option>
-      <option value="address">{t("inbox.by_address")}</option>
-      <option value="none">{t("inbox.by_conversation")}</option>
-    </select>
-  </label>
   {#if category !== null || sender !== null}
     <button class="back" onclick={() => navigate(sender !== null ? category : null)}>
       ← {sender !== null ? t("inbox.back_senders") : t("inbox.back_inbox")}
@@ -133,14 +160,14 @@
   <small>{t("inbox.loaded", { n: scoped.length })}</small>
 </div>
 
-{#snippet summary(label: string, rows: ThreadRow[], open: () => void)}
+{#snippet summary(label: string, rows: ThreadRow[], open: () => void, senderRow?: ThreadRow)}
   <div class="group-row" class:completed={rows.every(row => row.isDone)}>
   {#if isInbox}<button class="group-done" data-done-ids={rows.map(rowKey).join(",")}
     aria-label={`${rows.every(row => row.isDone) ? "Mark Undone" : "Mark Done"}: ${label}`}
     onpointerdown={(event) => begin(rows, event)}
     onclick={(event) => { if (event.detail === 0) void complete(rows); }}
     class:staged={rows.some(row => sweep.includes(rowKey(row)))}>✓</button>{/if}
-  <button class="summary" onclick={open}>
+  <button class="summary" onclick={open} oncontextmenu={(event) => { if (senderRow) context(senderRow,event); }}>
     <span class="summary-title">{label}<span class="count">{rows.length}</span><span class="arrow">›</span></span>
     <span class="preview">{rows.slice(0, 3).map(row => row.subject).join(" · ")}</span>
     <span class="unread">{t("inbox.unread_conversations", { n: rows.filter(row => !row.isRead).length })}</span>
@@ -158,23 +185,10 @@
     ondone={isInbox ? () => void done(row) : undefined}
     ondonepointer={isInbox ? (event) => begin([row], event) : undefined}
     completing={sweep.includes(rowKey(row))}
+    oncontextmenu={(event) => context(row,event)}
   />
-  {#if isInbox}
-    <details class="actions"><summary aria-label="Sender options">···</summary><div class="sender-options">
-      {#if senderAddress(row)}
-        <button aria-pressed={rules[senderAddress(row)]?.priority ?? false}
-          onclick={() => void saveRule(senderAddress(row), { priority: !rules[senderAddress(row)]?.priority })}>
-          {rules[senderAddress(row)]?.priority ? "⚡" : "+"} {t("inbox.priority_sender")}
-        </button>
-        <select aria-label={t("inbox.sender_category")} value={rules[senderAddress(row)]?.category ?? row.category ?? "mail"}
-          onchange={(event) => void saveRule(senderAddress(row), { category: event.currentTarget.value as Category })}>
-          <option value="mail">{t("inbox.mail")}</option>
-          <option value="notifications">{t("inbox.notifications")}</option>
-          <option value="newsletters">{t("inbox.newsletters")}</option>
-        </select>
-      {/if}
-    </div></details>
-  {/if}
+  <button class="sender-menu-trigger" aria-label={`Sender options: ${row.fromName}`}
+    onclick={(event) => context(row,event)}>···</button>
   </div>
 {/snippet}
 
@@ -182,8 +196,11 @@
   {#if priorityRows.length}
     <div class="priority">
       <h2>{t("inbox.priority")}</h2>
-      {#each priorityRows.slice(0, 5) as row (rowKey(row))}{@render message(row)}{/each}
-      {#if priorityRows.length > 5}
+      {#each priorityGroups.slice(0, 5) as group (group.key)}
+        {#if group.rows.length === 1}{@render message(group.rows[0])}
+        {:else}{@render summary(group.label,group.rows,() => navigate("priority",group.key),group.rows[0])}{/if}
+      {/each}
+      {#if priorityGroups.length > 5}
         <button class="more" onclick={() => navigate("priority")}>{t("inbox.show_priority", { n: priorityRows.length })}</button>
       {/if}
     </div>
@@ -193,7 +210,7 @@
     {#if group.rows.length === 1}
       {@render message(group.rows[0])}
     {:else}
-      {@render summary(group.label, group.rows, () => navigate(null, group.key))}
+      {@render summary(group.label, group.rows, () => navigate(null, group.key),group.rows[0])}
     {/if}
   {/each}
   {#if ordinaryGroups.length > limit}<button class="more" onclick={() => limit += 100}>{t("inbox.show_more")}</button>{/if}
@@ -212,7 +229,7 @@
     {#if group.rows.length === 1}
       {@render message(group.rows[0])}
     {:else}
-      {@render summary(group.label, group.rows, () => navigate(category, group.key))}
+      {@render summary(group.label, group.rows, () => navigate(category, group.key),group.rows[0])}
     {/if}
   {/each}
   {#if groups.length > limit}<button class="more" onclick={() => limit += 100}>{t("inbox.show_more")}</button>{/if}
@@ -227,16 +244,16 @@
   .group-row:hover .group-done, .group-done:focus-visible, .group-done.staged { opacity:1; }
   .group-done:hover, .group-done.staged { color:#749f9a; background:color-mix(in srgb,#749f9a 20%,transparent); }
   .completed .summary { opacity:.48; }
-  .show-done { margin-left:auto; display:flex; align-items:center; gap:6px; }
-  .show-done input { accent-color:#749f9a; }
-  .actions { position:absolute; right:12px; bottom:7px; font-size:11px; }
-  .actions>summary { cursor:pointer; padding:2px 8px; opacity:0; list-style:none; border-radius:5px; }
-  .message-wrap:hover .actions>summary, .actions:focus-within>summary, .actions[open]>summary { opacity:1; }
-  .sender-options { position:absolute; right:0; top:100%; width:200px; padding:12px; background:var(--surface); border:1px solid var(--hairline); border-radius:10px; box-shadow:0 8px 28px #0002; z-index:10; display:grid; gap:10px; }
-  @media(hover:none) { .group-done, .actions>summary { opacity:1; } }
+  .sender-menu-trigger { position:absolute; right:10px; top:50%; transform:translateY(-50%); padding:6px; border-radius:6px; opacity:0; color:var(--text-dim); }
+  .message-wrap:hover .sender-menu-trigger, .sender-menu-trigger:focus-visible { opacity:1; }
+  .sender-menu { position:fixed; z-index:200; width:240px; padding:6px; border:1px solid var(--hairline); border-radius:12px; background:var(--surface); color:var(--text); box-shadow:0 12px 40px #0003; }
+  .sender-menu header { padding:10px; font-size:11px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid var(--hairline); margin-bottom:4px; }
+  .sender-menu button { display:block; width:100%; text-align:left; padding:10px; border-radius:7px; font-size:12px; }
+  .sender-menu button:hover, .sender-menu button:focus-visible { background:var(--hover); }
+  .sender-menu .section-label { padding:10px 10px 4px; font-size:10px; color:var(--text-faint); }
+  @media(hover:none) { .group-done, .sender-menu-trigger { opacity:1; } }
   .organize { padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-bottom: 1px solid var(--hairline); }
-  label, small, .back, .unread { font-size: 11px; color: var(--text-faint); }
-  select { max-width: 145px; background: var(--bg); color: var(--text); border: 1px solid var(--hairline); border-radius: 4px; padding: 3px; font: inherit; }
+  small, .back, .unread { font-size: 11px; color: var(--text-faint); }
   small { width: 100%; }
   .summary { display: block; width: 100%; text-align: left; padding: 14px 22px 14px 42px; border-bottom: 1px solid var(--hairline); border-radius:10px; }
   .summary:hover { background: var(--hover); }
@@ -248,7 +265,4 @@
   .priority h2 { color:#b68b35; }
   h2 { font-size: 13px; padding: 12px 16px; }
   .more { width: 100%; padding: 12px 16px; font-size: 12px; color: var(--text-dim); text-align: left; }
-  .actions button { color: var(--text-dim); }
-  .actions button[aria-pressed="true"] { color: #b68b35; }
-  .actions button:disabled { opacity: 0.5; }
 </style>

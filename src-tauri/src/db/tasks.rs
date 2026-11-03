@@ -209,6 +209,7 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
     let tx = conn.transaction()?;
     let mut accounts = Vec::new();
     let mut folders = std::collections::BTreeSet::new();
+    let mut threads = std::collections::BTreeSet::new();
     let mut batches = std::collections::BTreeMap::<(String, i64, i64), Value>::new();
     for id in ids {
         let row: Option<(String,i64,i64,bool,String,String)> = tx.query_row(
@@ -260,7 +261,7 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
                 [origin],
                 |r| r.get(0),
             )?;
-            tx.execute("INSERT INTO cached_moves(message_id,origin_folder,origin_uid,origin_validity,expected_folder,desired_folder) VALUES(?1,?2,?3,?4,?5,?5)",params![id,origin,uid,validity,target])?;
+            tx.execute("INSERT INTO cached_moves(message_id,origin_folder,origin_uid,origin_validity,expected_folder,desired_folder,read_override) VALUES(?1,?2,?3,?4,?5,?5,(SELECT is_read FROM messages WHERE id=?1))",params![id,origin,uid,validity,target])?;
             let payload=batches.entry((account.clone(),origin,target)).or_insert_with(||json!({
                 "folderId":origin,"imapName":origin_name,"originValidity":validity,"uids":[],"cachedMessageIds":[],
                 "destFolderId":target,"destImapName":target_name,"createDest":done && provider!="gmail"
@@ -275,9 +276,22 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
                 .push(json!(id));
         }
         tx.execute(
-            "UPDATE messages SET folder_id=?2,uid=-id,local_move=1 WHERE id=?1",
-            params![id, target],
+            "UPDATE messages SET folder_id=?2,uid=-id,local_move=1,is_read=CASE WHEN ?3 THEN 1 ELSE is_read END WHERE id=?1",
+            params![id, target, done],
         )?;
+        if done {
+            tx.execute(
+                "UPDATE cached_moves SET read_override=1 WHERE message_id=?1",
+                [id],
+            )?;
+        }
+        if let Some(thread) =
+            tx.query_row("SELECT thread_id FROM messages WHERE id=?1", [id], |r| {
+                r.get::<_, Option<i64>>(0)
+            })?
+        {
+            threads.insert(thread);
+        }
         folders.insert(origin);
         folders.insert(target);
         if !accounts.contains(&account) {
@@ -285,12 +299,23 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
         }
     }
     for ((account, _, _), payload) in batches {
+        if done {
+            bodies::enqueue_op(
+                &tx,
+                &account,
+                "set_flag",
+                &json!({"folderId":payload["folderId"],"imapName":payload["imapName"],"originValidity":payload["originValidity"],"uids":payload["uids"],"flag":"seen","on":true}),
+            )?;
+        }
         bodies::enqueue_op(
             &tx,
             &account,
             if done { "archive" } else { "restore" },
             &payload,
         )?;
+    }
+    for thread in threads {
+        threading::recompute_thread(&tx, thread)?;
     }
     for folder in folders {
         queries::recompute_folder_unread(&tx, folder)?;
@@ -611,6 +636,83 @@ mod tests {
     }
 
     #[test]
+    fn done_marks_read_locally_and_before_server_archive_and_restore_stays_read() {
+        Db::open_in_memory()
+            .unwrap()
+            .with(|conn| {
+                seed(conn)?;
+                let original = message(1, 10, Some("<done-read@example.com>"), 10);
+                let (id, thread) = add(conn, &original);
+                queries::recompute_folder_unread(conn, 1)?;
+                set_done(conn, &[id], true)?;
+                let rows = list_inbox(conn, None, true, true, 0, 100)?;
+                assert!(rows[0].is_done && rows[0].row.is_read);
+                assert_eq!(
+                    conn.query_row::<i64, _, _>(
+                        "SELECT unread_count FROM threads WHERE id=?1",
+                        [thread],
+                        |r| r.get(0)
+                    )?,
+                    0
+                );
+                for folder in [1, 2] {
+                    assert_eq!(
+                        conn.query_row::<i64, _, _>(
+                            "SELECT unread_count FROM folders WHERE id=?1",
+                            [folder],
+                            |r| r.get(0)
+                        )?,
+                        0
+                    );
+                }
+                let ops = {
+                    let mut stmt =
+                        conn.prepare("SELECT kind,payload FROM pending_ops ORDER BY id")?;
+                    let rows = stmt
+                        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    rows
+                };
+                assert_eq!(
+                    ops.iter()
+                        .map(|(kind, _)| kind.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["set_flag", "archive"]
+                );
+                let seen: Value = serde_json::from_str(&ops[0].1).unwrap();
+                assert_eq!(seen["flag"], "seen");
+                assert_eq!(seen["on"], true);
+                assert_eq!(seen["uids"], json!([10]));
+                assert_eq!(seen["originValidity"], 1);
+                // A flag receipt must not confirm a move which has not happened.
+                finish_cached(conn, &seen, true)?;
+                assert!(!conn.query_row::<bool, _, _>(
+                    "SELECT confirmed FROM cached_moves WHERE message_id=?1",
+                    [id],
+                    |r| r.get(0)
+                )?);
+                let archive: Value = serde_json::from_str(&ops[1].1).unwrap();
+                finish_cached(conn, &archive, true)?;
+                // Stale destination flags cannot make a completed message unread.
+                let mut arrived = original.clone();
+                arrived.folder_id = 2;
+                arrived.uid = 77;
+                assert_eq!(add(conn, &arrived).0, id);
+                assert!(list_inbox(conn, None, true, true, 0, 100)?[0].row.is_read);
+                set_done(conn, &[id], false)?;
+                let restore = payload(conn);
+                finish_cached(conn, &restore, true)?;
+                let mut restored = original;
+                restored.uid = 99;
+                assert_eq!(add(conn, &restored).0, id);
+                let rows = list_inbox(conn, None, false, true, 0, 100)?;
+                assert!(!rows[0].is_done && rows[0].row.is_read);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn offline_undo_queues_inverse_with_actual_destination_uid() {
         Db::open_in_memory()
             .unwrap()
@@ -734,7 +836,7 @@ mod tests {
         db.with(|conn| {
             let rows = list_inbox(conn, None, true, true, 0, 100)?;
             assert_eq!(rows.len(), 1);
-            assert!(rows[0].is_done && rows[0].pending_move);
+            assert!(rows[0].is_done && rows[0].pending_move && rows[0].row.is_read);
             assert_eq!(
                 bodies::get_body(conn, id)?.unwrap().1.as_deref(),
                 Some("Saved offline")

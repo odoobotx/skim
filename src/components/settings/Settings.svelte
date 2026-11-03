@@ -2,7 +2,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { aiApi, aiStream, api, credentialStoreError, errorMessage } from "../../lib/api";
+  import { aiApi, aiStream, api, credentialStoreError, errorMessage, reportError } from "../../lib/api";
   import type { AiModel, AiProvider } from "../../lib/api";
   import { backdropClose } from "../../lib/backdrop";
   import { LOCALES, getLocale, setLocale, t, type Locale } from "../../lib/i18n/index.svelte";
@@ -508,6 +508,18 @@
   }
 </script>
 
+{#snippet readingLayout(accountId: string, label: string)}
+  <label class="writer-field">
+    <span class="microlabel">{label}</span>
+    <select aria-label={label} value={mail.readingLayoutFor(accountId)}
+      onchange={(event) => void mail.setReadingLayout(accountId, event.currentTarget.value as "full" | "split").catch(error => { reportError("layout.save",error); mail.noteError(t("ops.failed")); })}>
+      <option value="full">Full-width · open mail in place</option>
+      <option value="split">Split view · list beside email</option>
+    </select>
+    <span class="dim hint">Applies throughout this mailbox, including groups.</span>
+  </label>
+{/snippet}
+
 <!-- A binary on/off setting: label on the left, sliding switch on the right. -->
 {#snippet toggleRow(label: string, on: boolean, toggle: () => void)}
   <div class="toggle-row">
@@ -577,6 +589,7 @@
       {#if mail.accounts.length > 0}
         <section>
           <div class="microlabel">{t("settings.account")}</div>
+          {#if mail.accounts.length > 1}{@render readingLayout("*", "All inboxes reading layout")}{/if}
           {#each mail.accounts as account (account.id)}
             {@const open = mail.accounts.length === 1 || expandedAccountId === account.id}
             <div class="row">
@@ -615,6 +628,7 @@
               <div class="warn">{t("settings.remove_confirm")}</div>
             {:else if open}
               <div class="identity">
+                {@render readingLayout(account.id, "Reading layout")}
                 <label class="writer-field">
                   <span class="microlabel">{t("settings.sender_name")}</span>
                   <input

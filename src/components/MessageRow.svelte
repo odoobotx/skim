@@ -12,6 +12,7 @@
     ondone,
     ondonepointer,
     completing = false,
+    oncontextmenu,
   }: {
     thread: ThreadRow;
     selected?: boolean;
@@ -21,6 +22,7 @@
     ondone?: () => void;
     ondonepointer?: (event: PointerEvent) => void;
     completing?: boolean;
+    oncontextmenu?: (event: MouseEvent) => void;
   } = $props();
 
   // Which mailbox this row came from — shown only in the unified view, where
@@ -62,7 +64,7 @@
       <path d="M1.5 5.2l2.4 2.4L8.5 2.6" />
     </svg>
   </button>
-  <button class="row" onclick={() => onselect?.(thread.id)}>
+  <button class="row" onclick={() => onselect?.(thread.id)} {oncontextmenu}>
     <div class="line1">
       <span class="from">
         {#if !thread.isRead}<span class="unread-dot"></span>{/if}
@@ -121,8 +123,9 @@
      is simply set in from the edge — so revealing the box shifts nothing. */
   .check {
     position: absolute;
-    top: 13px;
-    right: 16px;
+    top: 50%;
+    transform:translateY(-50%);
+    right: 42px;
     width: 13px;
     height: 13px;
     border: 1px solid var(--text-faint);
@@ -164,7 +167,7 @@
     gap: 8px;
     /* Keeps the date clear of the checkbox slot. Only this line is set in —
        the subject and snippet still run the full width of the row. */
-    padding-right: 21px;
+    padding-right: 52px;
   }
   .from {
     font-size: 13.5px;

@@ -23,6 +23,7 @@ const state = $state({
   selectedMessageId: null as number | null,
   groupThreads: true,
   showDone: false,
+  readingLayouts: {} as Record<string, "full" | "split">,
   syncState: "idle" as SyncState,
   syncMessage: null as string | null,
   syncProgress: null as { done: number; total: number } | null,
@@ -536,6 +537,14 @@ export const mail = {
   get groupThreads() {
     return state.groupThreads;
   },
+  get readingLayout(): "full" | "split" { return state.readingLayouts[state.activeAccountId ?? UNIFIED] ?? "full"; },
+  readingLayoutFor(accountId: string): "full" | "split" { return state.readingLayouts[accountId] ?? "full"; },
+  async setReadingLayout(accountId: string, layout: "full" | "split") {
+    const before = state.readingLayouts;
+    state.readingLayouts = {...before, [accountId]: layout};
+    try { await api.setSetting("reading_layouts", JSON.stringify(state.readingLayouts)); }
+    catch(error) { state.readingLayouts = before; throw error; }
+  },
   get showDone() { return state.showDone; },
   async setShowDone(on: boolean) {
     if (state.showDone === on) return;
@@ -556,7 +565,7 @@ export const mail = {
   async setDoneRows(rows: ThreadRow[], done: boolean) {
     const keys = new Set(rows.map(rowKey));
     state.threads = state.threads.flatMap(row => keys.has(rowKey(row))
-      ? done && !state.showDone ? [] : [{ ...row, isDone: done, pendingMove: true }] : [row]);
+      ? done && !state.showDone ? [] : [{ ...row, isDone: done, isRead: done || row.isRead, pendingMove: true }] : [row]);
     if (done && !state.showDone && rows.some(row => row.id === state.selectedThreadId)) {
       state.selectedThreadId = null;
       state.selectedMessageId = null;
@@ -649,6 +658,12 @@ export const mail = {
     const settings = await api.getSettings();
     state.groupThreads = settings.group_threads !== "off";
     state.showDone = settings.inbox_show_done === "on";
+    try {
+      const layouts: unknown = JSON.parse(settings.reading_layouts ?? "{}");
+      if (layouts && typeof layouts === "object" && !Array.isArray(layouts)) {
+        state.readingLayouts = Object.fromEntries(Object.entries(layouts).filter(([,value]) => value === "full" || value === "split"));
+      }
+    } catch { state.readingLayouts = {}; }
     state.accounts = await api.listAccounts();
     // Restore the last scope; self-heal a stale id. With 2+ mailboxes the
     // unified view is the default — a concrete saved choice is respected,

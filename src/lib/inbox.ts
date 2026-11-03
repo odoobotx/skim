@@ -2,7 +2,7 @@ import type { ThreadRow } from "./types";
 
 export type GroupBy = "none" | "sender" | "address";
 export type Category = "mail" | "notifications" | "newsletters";
-export interface SenderRule { priority?: boolean; category?: Category }
+export interface SenderRule { priority?: boolean; category?: Category; group?: boolean }
 export type SenderRules = Record<string, SenderRule>;
 export interface InboxGroup {
   key: string;
@@ -22,17 +22,31 @@ export function parseSenderRules(value?: string): SenderRules {
     for (const [address, rule] of Object.entries(parsed)) {
       if (!address.includes("@")) continue;
       if (!rule || typeof rule !== "object" || Array.isArray(rule)) continue;
-      const { priority, category } = rule as SenderRule;
-      if (typeof priority !== "boolean" && !["mail", "notifications", "newsletters"].includes(category ?? "")) continue;
+      const { priority, category, group } = rule as SenderRule;
+      if (typeof priority !== "boolean" && typeof group !== "boolean" && !["mail", "notifications", "newsletters"].includes(category ?? "")) continue;
       rules[address.trim().toLowerCase()] = {
         priority: priority === true,
         category: ["mail", "notifications", "newsletters"].includes(category ?? "") ? category : undefined,
+        ...(typeof group === "boolean" ? {group} : {}),
       };
     }
     return rules;
   } catch {
     return {};
   }
+}
+
+/** Personal sender groups are opt-in and keyed by address, never display name. */
+export function senderGroups(rows: ThreadRow[], rules: SenderRules): InboxGroup[] {
+  const groups = new Map<string, InboxGroup>();
+  for (const row of rows) {
+    const address = senderAddress(row);
+    const key = address && rules[address]?.group ? `address:${address}` : `row:${row.messageId ?? row.id}`;
+    let group = groups.get(key);
+    if (!group) { group = {key, label: row.fromName.trim() || address, rows: []}; groups.set(key, group); }
+    group.rows.push(row);
+  }
+  return [...groups.values()];
 }
 
 /** Sender grouping deliberately spans subjects. Exact-address mode keeps

@@ -86,13 +86,15 @@ try {
   await page.getByRole("dialog", { name: "View image" }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "detached" });
-  await page.getByRole("combobox", { name: "Email appearance" }).selectOption("theme");
+  await page.getByLabel("Email appearance",{exact:true}).click();
+  await page.getByRole("button",{name:/Match app theme/}).click();
   await page.waitForFunction(() => {
     const body = document.querySelector("iframe")?.contentDocument?.body;
     return body && getComputedStyle(body).backgroundColor !== "rgb(255, 255, 255)";
   });
   assert.equal(await frame.getByText("Hello Example User,").evaluate(el => getComputedStyle(el).color), "rgb(236, 236, 239)");
-  await page.getByRole("combobox", { name: "Email appearance" }).selectOption("original");
+  await page.getByLabel("Email appearance",{exact:true}).click();
+  await page.getByRole("button",{name:/Original email/}).click();
 
   await page.setViewportSize({ width: 320, height: 700 });
   for (const [alt, attributes, maxWidth, maxHeight, ratio] of [

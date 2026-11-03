@@ -95,6 +95,24 @@
   $effect(() => () => resizeObs?.disconnect());
 
   let appearance = $state<"original" | "theme">("original");
+  let appearanceMenu = $state<HTMLDetailsElement>();
+  let appearanceOpen = $state(false);
+  $effect(() => {
+    if (!appearanceOpen) return;
+    const outside = (event: PointerEvent) => { if (!appearanceMenu?.contains(event.target as Node)) appearanceOpen=false; };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.stopPropagation(); appearanceOpen=false; appearanceMenu?.querySelector("summary")?.focus(); }
+      if (["ArrowDown","ArrowUp"].includes(event.key)) {
+        event.preventDefault(); event.stopPropagation();
+        const buttons=[...(appearanceMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+        const index=buttons.indexOf(document.activeElement as HTMLButtonElement);
+        buttons[index < 0 ? event.key === "ArrowDown" ? 0 : buttons.length-1 : (index+(event.key === "ArrowDown" ? 1 : buttons.length-1))%buttons.length]?.focus();
+      }
+    };
+    window.addEventListener("pointerdown",outside);
+    window.addEventListener("keydown",key,true);
+    return () => {window.removeEventListener("pointerdown",outside);window.removeEventListener("keydown",key,true);};
+  });
   let zoom = $state<{ src: string; alt: string } | null>(null);
   let imageDialog: HTMLDialogElement | undefined = $state();
   const plainText = $derived(/^<pre class="skim-plain">[\s\S]*<\/pre>$/.test(html));
@@ -280,13 +298,19 @@
 </script>
 
 {#if !plainText}
-  <label class="appearance">
-    {t("render.appearance")}
-    <select bind:value={appearance}>
-      <option value="original">{t("render.original")}</option>
-      <option value="theme">{t("render.theme")}</option>
-    </select>
-  </label>
+  <div class="appearance">
+    <details bind:this={appearanceMenu} bind:open={appearanceOpen}>
+      <summary aria-label="Email appearance">Appearance <span>{appearance === "original" ? "Original" : "App theme"}</span><span aria-hidden="true">⌄</span></summary>
+      <div class="appearance-options">
+        <button aria-pressed={appearance === "original"} onclick={() => { appearance="original"; appearanceOpen=false; appearanceMenu?.querySelector("summary")?.focus(); }}>
+          <strong>Original email</strong><small>Keep the sender's colors and layout.</small>
+        </button>
+        <button aria-pressed={appearance === "theme"} onclick={() => { appearance="theme"; appearanceOpen=false; appearanceMenu?.querySelector("summary")?.focus(); }}>
+          <strong>Match app theme</strong><small>Adapt the message to light or dark mode.</small>
+        </button>
+      </div>
+    </details>
+  </div>
 {/if}
 
 <iframe
@@ -329,7 +353,14 @@
 
 <style>
   .appearance { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 8px; color: var(--text-faint); font-size: 11px; }
-  .appearance select { color: var(--text); background: var(--surface); border: 1px solid var(--hairline); border-radius: 4px; padding: 4px; font: inherit; }
+  .appearance details { position:relative; }
+  .appearance summary { display:flex; align-items:center; gap:10px; list-style:none; cursor:pointer; padding:7px 10px; border-radius:8px; border:1px solid var(--hairline); }
+  .appearance summary span { color:var(--text-dim); }
+  .appearance-options { position:absolute; right:0; top:calc(100% + 6px); z-index:20; width:270px; border:1px solid var(--hairline); border-radius:12px; background:var(--surface); padding:5px; box-shadow:0 10px 32px #0003; }
+  .appearance-options button { display:block; width:100%; padding:12px; border-radius:8px; text-align:left; }
+  .appearance-options button:hover, .appearance-options button[aria-pressed="true"] { background:var(--hover); }
+  .appearance-options strong { display:block; color:var(--text); font-size:12px; font-weight:550; }
+  .appearance-options small { display:block; margin-top:4px; color:var(--text-dim); font-size:11px; line-height:1.4; }
   .image-dialog { max-width: 95vw; max-height: 90vh; padding: 16px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; color: #17171b; overflow: auto; }
   .image-dialog::backdrop { background: #0009; }
   .image-dialog img { display: block; max-width: 85vw; max-height: 75vh; object-fit: contain; }

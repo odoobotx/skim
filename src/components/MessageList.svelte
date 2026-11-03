@@ -129,7 +129,7 @@
   }
 </script>
 
-<section class="list" class:wide={mail.selectedThreadId === null && !ui.recapOpen}>
+<section class="list" class:wide={mail.readingLayout === "full" && mail.selectedThreadId === null && !ui.recapOpen}>
   <header class="head">
     {#if mail.selecting}
       <!-- The header becomes the action bar rather than a second strip
@@ -145,6 +145,10 @@
         </button>
       {/if}
       <div class="head-right">
+        {#if mail.selectedFolder?.role === "inbox"}
+          <label class="show-done"><input type="checkbox" checked={mail.showDone}
+            onchange={(event) => void mail.setShowDone(event.currentTarget.checked).catch(error => { reportError("inbox.showDone",error); mail.noteError(t("ops.failed")); })} /> Show Done</label>
+        {/if}
         {#if recapAvailable}
           <button class="recap-chip" onclick={openRecap}>✦ {t("ai.recap")}</button>
         {/if}
@@ -208,8 +212,10 @@
 </section>
 
 <style>
+  .show-done { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); white-space:nowrap; }
+  .show-done input { accent-color:#749f9a; }
   .list.wide { width:auto; flex:1; }
-  .list.wide :global(.row) { display:grid; grid-template-columns:minmax(150px,25%) minmax(120px,1fr) minmax(0,1.7fr) 60px; align-items:center; gap:16px; min-height:48px; padding:8px 44px 8px 42px; border-radius:9px; }
+  .list.wide :global(.row) { display:grid; grid-template-columns:minmax(150px,25%) minmax(120px,1fr) minmax(0,1.7fr) 60px; align-items:center; gap:16px; min-height:48px; padding:8px 78px 8px 42px; border-radius:9px; }
   .list.wide :global(.line1) { display:contents; }
   .list.wide :global(.from) { grid-column:1; grid-row:1; }
   .list.wide :global(.date) { grid-column:4; grid-row:1; text-align:right; }

@@ -479,7 +479,15 @@
           <Home />
         {:else}
         <Sidebar />
-        <MessageList />
+        <div class="list-host" class:split={mail.readingLayout === "split"}
+          class:reading-hidden={mail.readingLayout === "full" && (mail.selectedThreadId !== null || ui.recapOpen)}>
+          <MessageList />
+        </div>
+        {#if mail.selectedThreadId !== null || ui.recapOpen || mail.readingLayout === "split"}
+        <div class="reading-host">
+        {#if mail.readingLayout === "full"}
+          <div class="reading-nav"><button onclick={() => { mail.selectedThreadId = null; mail.selectedMessageId = null; ui.closeRecap(); }}>← Back to list</button></div>
+        {/if}
         {#if mail.selectedFolder?.role === "drafts" && draftEditorId !== null}
           {#key draftEditorId}
             <ComposeForm
@@ -501,8 +509,10 @@
               onpopout={() => popOutRecap(recap)}
             />
           {/if}
-        {:else if mail.selectedThreadId !== null}
+        {:else if mail.selectedThreadId !== null || mail.readingLayout === "split"}
           <ReadingPane />
+        {/if}
+        </div>
         {/if}
         {/if}
       </main>
@@ -535,6 +545,12 @@
 </div>
 
 <style>
+  .list-host { display:flex; flex:1; min-width:0; min-height:0; }
+  .list-host.split { flex:0 0 var(--list-w); }
+  .list-host.reading-hidden { display:none; }
+  .reading-host { display:flex; flex-direction:column; flex:1; min-width:0; min-height:0; overflow:hidden; }
+  .reading-nav { padding:12px 24px; border-bottom:1px solid var(--hairline); }
+  .reading-nav button { font-size:12px; color:var(--text-dim); padding:4px 0; }
   .home-view :global(.titlebar) { position:absolute; inset:0 0 auto; z-index:10; background:transparent; border:0; box-shadow:none; }
   .home-view :global(.titlebar .brand) { visibility:hidden; }
   .home-view :global(.titlebar .ctl) { color:#fff; }

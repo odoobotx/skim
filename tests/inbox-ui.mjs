@@ -54,6 +54,9 @@ try {
   await page.locator("nav.sidebar").getByRole("button", { name: "More", exact: true }).click();
   await page.locator("nav.sidebar").getByRole("button", { name: /^Archive/ }).waitFor();
   await page.locator("nav.sidebar").getByRole("button", { name: "More", exact: true }).click();
+  assert.equal(await list.locator("button.row").filter({hasText:"Anna Weber"}).count(), 2, "Personal senders start ungrouped");
+  await list.locator("button.row").filter({hasText:"Anna Weber"}).first().click({button:"right"});
+  await page.getByRole("menuitem", {name:"Group by Sender",exact:true}).click();
   await list.getByRole("button", { name: /^Anna Weber/ }).click();
   assert.equal(await list.locator("button.row").filter({ hasText: "Anna Weber" }).count(), 2);
   await list.getByRole("button", { name: "Select message", exact: true }).first().click();
@@ -82,8 +85,8 @@ try {
   await page.locator("nav.sidebar .sync.error").waitFor();
   await priya.locator("button.row").waitFor();
   await page.evaluate(() => localStorage.removeItem("skimdemo.failArchive"));
-  await priya.locator("details summary").click();
-  await priya.getByRole("button", { name: /Priority sender/ }).click();
+  await priya.locator(".sender-menu-trigger").click();
+  await page.getByRole("menuitem", { name: "Make Priority sender", exact:true }).click();
   await page.waitForFunction(() => JSON.parse(JSON.parse(localStorage.getItem("skimdemo.settings")).inbox_sender_rules)["priya@brightwave.io"]?.priority === true);
   await page.reload();
   await page.getByRole("button", { name: "Check Inbox" }).click();
@@ -113,6 +116,25 @@ try {
   assert.equal(await list.locator("[data-done-ids]").count(), 0);
   await page.locator("nav.sidebar").getByRole("button", { name: /^Inbox/ }).click();
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
+  // Account-level layout applies to categories and sender drill-downs alike.
+  await page.locator("nav.sidebar").getByRole("button", {name:/Settings$/}).click();
+  await page.getByLabel("All inboxes reading layout",{exact:true}).selectOption("split");
+  await page.locator(".overlay .close").click();
+  assert(await page.locator(".list-host.split").isVisible());
+  assert(await page.locator(".reading-host").isVisible());
+  await page.locator("nav.sidebar").getByRole("button", {name:/Settings$/}).click();
+  await page.getByLabel("All inboxes reading layout",{exact:true}).selectOption("full");
+  await page.locator(".overlay .close").click();
+  await list.getByRole("button", { name: /^Anna Weber/ }).click();
+  await list.locator("button.row").first().click();
+  await page.getByRole("button", {name:"← Back to list",exact:true}).waitFor();
+  assert(!(await page.locator(".list-host").isVisible()), "Full-width email replaces the list");
+  await page.getByRole("button", {name:"← Back to list",exact:true}).click();
+  assert.equal(await list.locator("button.row").count(),2,"Back preserves the sender drill-down");
+  await list.getByRole("button", {name:/Back to senders/}).click();
+  await page.reload();
+  await page.getByRole("button", {name:"Check Inbox"}).click();
+  assert.equal(await page.evaluate(async () => (await import("/src/lib/stores/mail.svelte.ts")).mail.readingLayout),"full");
   await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });
   await page.screenshot({ path: new URL("../demo/output/task-inbox.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
   await page.evaluate(async () => {
@@ -120,6 +142,17 @@ try {
     ui.setTheme("cold", "dark");
   });
   await page.screenshot({ path: new URL("../demo/output/task-inbox-dark.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
+  await page.evaluate(async () => {
+    const {mail}=await import("/src/lib/stores/mail.svelte.ts");
+    await mail.setShowDone(false);
+    await mail.setDoneRows([...mail.threads],true);
+  });
+  await page.waitForFunction(async () => (await import("/src/lib/stores/mail.svelte.ts")).mail.threads.length === 0);
+  await list.getByRole("checkbox",{name:"Show Done",exact:true}).check();
+  await page.waitForFunction(async () => {
+    const {mail}=await import("/src/lib/stores/mail.svelte.ts");
+    return mail.threads.length > 0 && mail.threads.every(row=>row.isDone && row.isRead) && mail.selectedFolder.unreadCount === 0;
+  });
   assert.deepEqual(errors, []);
   console.log("Inbox UI passed: Home, minimal sidebar, sender drill-down, category completion, Show Done, restore, sweep batching, failure recovery, persisted priority, unified Sent.");
 } finally {

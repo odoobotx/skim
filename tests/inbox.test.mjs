@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../src/lib/inbox.ts", import.meta.url), "ut
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 });
-const { groupInbox, inboxSection, parseSenderRules } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { groupInbox, senderGroups, inboxSection, parseSenderRules } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 const row = (id, fromName, fromAddr, extra = {}) => ({
   id, accountId: "work", fromName, fromAddr, subject: `Subject ${id}`,
   snippet: "", date: 100 - id, isRead: false, isStarred: false,
@@ -54,4 +54,12 @@ test("automatic categories remain active until explicitly corrected by the sende
   assert.equal(inboxSection(notification, {}), "notifications");
   assert.equal(inboxSection(notification, parseSenderRules('{"updates@example.com":{"priority":false}}')), "notifications");
   assert.equal(inboxSection(notification, {"updates@example.com": {category: "mail"}}), "mail");
+});
+
+test("sender grouping is opt-in, address-specific, and independently reversible", () => {
+  const rows=[row(1,"Anna","anna@example.com"),row(2,"Anna","other@example.com"),row(3,"Anna","anna@example.com")];
+  assert.equal(senderGroups(rows,{}).length,3);
+  const rules=parseSenderRules('{"anna@example.com":{"group":true}}');
+  assert.deepEqual(senderGroups(rows,rules).map(group=>group.rows.map(row=>row.id)),[[1,3],[2]]);
+  assert.equal(senderGroups(rows,parseSenderRules('{"anna@example.com":{"group":false}}')).length,3);
 });

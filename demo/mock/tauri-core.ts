@@ -5,11 +5,13 @@
 // UI runs unchanged in a plain browser, served entirely fake data.
 
 import * as db from "./data";
+import { emitDemo } from "./tauri-event";
 
 // Used only by headless tests, with this synthetic mailbox.
 export const commandLog: { cmd: string; args: any }[] = [];
 const savedSettings: Record<string, string> = JSON.parse(localStorage.getItem("skimdemo.settings") ?? "{}");
 const doneRows = new Set<number>(JSON.parse(localStorage.getItem("skimdemo.done") ?? "[]"));
+const readRows = new Set<number>([...doneRows, ...JSON.parse(localStorage.getItem("skimdemo.read") ?? "[]")]);
 if (localStorage.getItem("skimdemo.taskInbox") === "on") {
   db.INBOX_THREADS.push({ ...db.INBOX_THREADS[0], id: 109, subject: "A separate conversation with Anna" });
 }
@@ -35,6 +37,13 @@ const MULTI = () => {
     return false;
   }
 };
+
+function unreadCounts(): Record<string,number> {
+  const rows=MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row=>({...row,accountId:db.ACCOUNT.id}));
+  const counts:Record<string,number>={};
+  for (const row of rows) if (!row.isRead && !readRows.has(row.id) && !doneRows.has(row.id)) counts[row.accountId]=(counts[row.accountId] ?? 0)+1;
+  return counts;
+}
 
 // ---- AI streaming --------------------------------------------------------
 export class Channel<T = unknown> {
@@ -159,7 +168,7 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "list_accounts":
       return ok(MULTI() ? [db.ACCOUNT, db.ACCOUNT2] : [db.ACCOUNT]);
     case "inbox_unread_counts":
-      return ok(MULTI() ? { "acc-1": 3, "acc-2": 2 } : { "acc-1": 3 });
+      return ok(unreadCounts());
     case "google_oauth_available":
       return ok(false);
     case "microsoft_oauth_available":
@@ -183,9 +192,9 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
 
     // mail
     case "list_folders":
-      return ok(MULTI() && args.accountId === "acc-2" ? db.FOLDERS2 : db.FOLDERS);
+      return ok((MULTI() && args.accountId === "acc-2" ? db.FOLDERS2 : db.FOLDERS).map(folder => folder.role === "inbox" ? {...folder,unreadCount:unreadCounts()[folder.accountId] ?? 0} : folder));
     case "list_unified_folders":
-      return ok(db.UNIFIED_FOLDERS);
+      return ok(db.UNIFIED_FOLDERS.map(folder => folder.role === "inbox" ? {...folder,unreadCount:Object.values(unreadCounts()).reduce((a,b)=>a+b,0)} : folder));
     case "list_unified_threads":
     case "list_unified_messages":
       return ok(args.offset > 0 ? [] : db.unifiedList(args.role ?? null));
@@ -201,8 +210,8 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "list_recent_unread":
     case "list_task_inbox": {
       const rows = MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row => ({...row, accountId: db.ACCOUNT.id}));
-      return ok(rows.filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)) && (cmd !== "list_recent_unread" || !row.isRead))
-        .map(row => ({...row, isDone: doneRows.has(row.id), pendingMove: false,
+      return ok(rows.filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)) && (cmd !== "list_recent_unread" || !(row.isRead || readRows.has(row.id))))
+        .map(row => ({...row, isDone: doneRows.has(row.id), isRead:row.isRead || readRows.has(row.id), pendingMove: false,
           category: row.fromAddr.includes("github") ? "notifications" : row.fromAddr.includes("stripe") ? "newsletters" : "mail"}))
         .slice(args.offset ?? 0, cmd === "list_recent_unread" ? 5 : args.offset + args.limit));
     }
@@ -210,9 +219,11 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "set_thread_done": {
       if (localStorage.getItem("skimdemo.failArchive") === "on") return Promise.reject(new Error("Synthetic archive failure"));
       for (const id of args.threadIds ?? [args.threadId]) {
-        if (args.done) doneRows.add(id); else doneRows.delete(id);
+        if (args.done) {doneRows.add(id);readRows.add(id);} else doneRows.delete(id);
       }
       localStorage.setItem("skimdemo.done", JSON.stringify([...doneRows]));
+      localStorage.setItem("skimdemo.read", JSON.stringify([...readRows]));
+      queueMicrotask(() => emitDemo("folders:updated",{}));
       return ok(undefined);
     }
     case "get_thread": {
