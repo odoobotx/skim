@@ -2238,7 +2238,10 @@ impl Engine {
                     // stays in All Mail.
                     self.delete_and_expunge(&uids).await?;
                 } else {
-                    let dest = self.role_folder("archive", "Archive").await?;
+                    let dest = match payload["destImapName"].as_str().filter(|s| !s.is_empty()) {
+                        Some(name) => name.to_string(),
+                        None => self.role_folder("archive", "Archive").await?,
+                    };
                     if payload["createDest"].as_bool().unwrap_or(false) {
                         let _ = self.session().await?.create(&dest).await;
                     }
