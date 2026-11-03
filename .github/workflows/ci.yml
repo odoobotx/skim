@@ -55,3 +55,18 @@ jobs:
       - name: Tests
         run: cargo test
         working-directory: src-tauri
+
+      - name: Build offline email rendering helper
+        run: cargo build --example render_email
+        working-directory: src-tauri
+
+      - name: Email rendering tests (synthetic mail)
+        run: npm run test:rendering
+
+      - name: Save offline rendering helper
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendering-tool
+          path: src-tauri/target/debug/examples/render_email.exe
+          if-no-files-found: ignore

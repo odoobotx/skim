@@ -55,6 +55,11 @@ url = "2"
 sha2 = "0.11"
 getrandom = "0.3"
 ammonia = "4"
+# Inline embedded email CSS only; never resolve network or filesystem stylesheets.
+css-inline = { version = "0.23.1", default-features = false }
+# Already used by html2text/ammonia; reuse their DOM and CSS token parsers.
+dom_query = { version = "0.27", default-features = false }
+cssparser = "0.37"
 tauri-winrt-notification = "0.7"
 # `Win32_NetworkManagement_Dns`: DnsQuery_W for onboarding's MX probe. The system
 # resolver (and its cache) instead of a bundled stub resolver — nothing new to

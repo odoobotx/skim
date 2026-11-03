@@ -392,5 +392,10 @@
   "inbox.rules_failed": "Sender rules could not be loaded or saved. Changes may not survive restart.",
   "inbox.load_more": "Load older conversations",
   "inbox.show_priority": "Show all priority ({n} loaded)",
-  "inbox.show_more": "Show more loaded groups or conversations"
+  "inbox.show_more": "Show more loaded groups or conversations",
+  "render.appearance": "Email appearance",
+  "render.original": "Original appearance",
+  "render.theme": "Follow app theme",
+  "render.view_image": "View image",
+  "render.close_image": "Close image"
 }

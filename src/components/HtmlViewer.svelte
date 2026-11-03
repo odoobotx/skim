@@ -1,6 +1,7 @@
 <script lang="ts">
   // Renders sanitized email HTML inside a sandboxed iframe (no scripts) with
   // a strict CSP. Links open in the system browser; height tracks content.
+  import { buildEmailDocument } from "../lib/email-document";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ui } from "../lib/stores/ui.svelte";
   import { t } from "../lib/i18n/index.svelte";
@@ -93,12 +94,13 @@
 
   $effect(() => () => resizeObs?.disconnect());
 
-  // Emails that carry their own colors (inline color/background, bgcolor,
-  // <font color>) assume a light page background they never declare. Honor
-  // that by rendering them on an explicit white canvas even in dark theme —
-  // forcing the dark canvas produced dark-on-dark, invisible text. Plain-text
-  // and colorless emails still follow the app theme.
-  const ownColors = $derived(hasOwnColors(html));
+  let appearance = $state<"original" | "theme">("original");
+  let zoom = $state<{ src: string; alt: string } | null>(null);
+  let imageDialog: HTMLDialogElement | undefined = $state();
+  const plainText = $derived(/^<pre class="skim-plain">[\s\S]*<\/pre>$/.test(html));
+  const original = $derived(!plainText && appearance === "original");
+  $effect(() => { void html; zoom = null; });
+  $effect(() => { if (zoom && imageDialog && !imageDialog.open) imageDialog.showModal(); });
   // The iframe document can't see the app's CSS variables, so resolve --surface
   // here and paint it in. Transparency looks like the obvious answer but isn't:
   // under `color-scheme: dark` the UA paints its own opaque canvas and ignores a
@@ -112,71 +114,8 @@
     );
   });
   const srcdoc = $derived(
-    buildDoc(html, ui.effective === "dark" && !ownColors, ownColors, surface),
+    buildEmailDocument(html, ui.effective === "dark" && !original, original, surface),
   );
-
-  function hasOwnColors(body: string): boolean {
-    return (
-      /(?:^|[;\s"'])(?:background-color|background|color)\s*:/i.test(body) ||
-      /\bbgcolor\s*=/i.test(body) ||
-      /<font\b[^>]*\bcolor\s*=/i.test(body)
-    );
-  }
-
-  function buildDoc(body: string, dark: boolean, ownColors: boolean, surface: string): string {
-    // The default canvas follows the app theme: it's painted with the live
-    // --surface, so the message blends into the pane in every palette. It used
-    // to be hardcoded (#ffffff / #141418) — those happened to equal cold-light
-    // and cold-dark's surface, so the drift only became visible once the warm
-    // palette landed and every email turned into a mismatched block.
-    //
-    // Emails that bring their own (inline) colors still get an explicit white
-    // page, since that's the background they were written against — the
-    // sanitizer already limits what CSS survives.
-    const colors = dark
-      ? {
-          scheme: "dark",
-          bg: surface,
-          text: "#ececef",
-          link: "#8ab4f8",
-          quoteBorder: "#3a3a42",
-          quoteText: "#a3a3ab",
-        }
-      : {
-          scheme: "light",
-          bg: ownColors ? "#ffffff" : surface,
-          text: "#17171b",
-          link: "#1a56c4",
-          quoteBorder: "#dddddd",
-          quoteText: "#555555",
-        };
-    return `<!doctype html><html><head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http://skim-cid.localhost data: https: http:; style-src 'unsafe-inline'">
-<style>
-  :root { color-scheme: ${colors.scheme}; }
-  /* The background goes on the root too, not just body: the canvas takes its
-     colour from html first, and color-scheme makes the UA paint an opaque
-     default there — which would defeat a transparent body. */
-  html, body { margin: 0; padding: 0; background: ${colors.bg}; }
-  body {
-    /* For the height measurement below, which reads this box: keep the
-       children's margins inside. A first or last child's margin would
-       otherwise collapse out of the body, so the body's height would miss
-       what the document still counts and the frame would come up exactly
-       that margin short, which is a scrollbar on the message. */
-    display: flow-root;
-    font-family: 'Hanken Grotesk', 'Segoe UI', sans-serif;
-    font-size: 14px; line-height: 1.6; color: ${colors.text};
-    word-wrap: break-word; overflow-wrap: break-word;
-  }
-  img { max-width: 100%; height: auto; }
-  img[src=""] { display: none; }
-  a { color: ${colors.link}; }
-  table { max-width: 100%; }
-  blockquote { margin: 8px 0 8px 2px; padding-left: 12px; border-left: 2px solid ${colors.quoteBorder}; color: ${colors.quoteText}; }
-  pre.skim-plain { white-space: pre-wrap; font: inherit; margin: 0; }
-</style></head><body>${body}</body></html>`;
-  }
 
   function setupDoc(doc: Document) {
     observedDoc = doc;
@@ -233,6 +172,34 @@
     doc.fonts?.ready.then(measure).catch(() => {});
     // Images loading later change the height.
     for (const img of Array.from(doc.images)) {
+      // Keep smaller sender limits, but never let inline CSS escape the pane.
+      const maxWidth = img.style.maxWidth;
+      img.style.maxWidth = maxWidth && maxWidth !== "none" ? `min(${maxWidth}, 100%)` : "100%";
+      const pixels = (value: string | null) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value)
+        ? parseFloat(value) : 0;
+      const authoredWidth = pixels(img.style.width || img.getAttribute("width"));
+      const authoredHeight = pixels(img.style.height || img.getAttribute("height"));
+      if (authoredWidth && authoredHeight) {
+        img.style.aspectRatio = `${authoredWidth} / ${authoredHeight}`;
+        img.style.height = "auto";
+      } else if (!img.style.width && !img.hasAttribute("width") && authoredHeight) {
+        // Respect height-only logo hints without stretching their native ratio.
+        img.style.maxHeight = `min(${img.style.maxHeight || "100000px"}, ${authoredHeight}px)`;
+        img.style.height = "auto";
+      }
+      if (!img.closest("a") && img.getAttribute("src")) {
+        img.style.cursor = "zoom-in";
+        img.tabIndex = 0;
+        img.setAttribute("role", "button");
+        img.setAttribute("aria-label", t("render.view_image"));
+        img.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            zoom = { src: img.src, alt: img.alt };
+          }
+        });
+      }
       img.addEventListener("load", measure);
       img.addEventListener("error", measure);
     }
@@ -243,6 +210,8 @@
       const target = (e.target as HTMLElement | null)?.closest("a");
       if (!target) {
         gate = null;
+        const img = (e.target as HTMLElement | null)?.closest("img");
+        if (img?.getAttribute("src")) zoom = { src: img.src, alt: img.alt };
         return;
       }
       e.preventDefault();
@@ -310,6 +279,16 @@
   }
 </script>
 
+{#if !plainText}
+  <label class="appearance">
+    {t("render.appearance")}
+    <select bind:value={appearance}>
+      <option value="original">{t("render.original")}</option>
+      <option value="theme">{t("render.theme")}</option>
+    </select>
+  </label>
+{/if}
+
 <iframe
   bind:this={iframe}
   title={t("a11y.message")}
@@ -318,6 +297,15 @@
   onload={onLoad}
   style="height: {height}px"
 ></iframe>
+
+{#if zoom}
+  <dialog bind:this={imageDialog} class="image-dialog" aria-label={t("render.view_image")}
+    onclose={() => zoom = null} oncancel={() => zoom = null}
+    onkeydown={(event) => event.stopPropagation()}>
+    <button class="image-close" onclick={() => { imageDialog?.close(); zoom = null; }}>{t("render.close_image")}</button>
+    <img src={zoom.src} alt={zoom.alt} />
+  </dialog>
+{/if}
 
 {#if gate}
   <div
@@ -340,6 +328,12 @@
 {/if}
 
 <style>
+  .appearance { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 8px; color: var(--text-faint); font-size: 11px; }
+  .appearance select { color: var(--text); background: var(--surface); border: 1px solid var(--hairline); border-radius: 4px; padding: 4px; font: inherit; }
+  .image-dialog { max-width: 95vw; max-height: 90vh; padding: 16px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; color: #17171b; overflow: auto; }
+  .image-dialog::backdrop { background: #0009; }
+  .image-dialog img { display: block; max-width: 85vw; max-height: 75vh; object-fit: contain; }
+  .image-close { display: block; margin: 0 0 12px auto; font-size: 13px; }
   iframe {
     width: 100%;
     border: none;

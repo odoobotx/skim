@@ -45,6 +45,7 @@ const STYLE_ALLOWED: &[&str] = &[
     "border-spacing",
     "width",
     "max-width",
+    "max-height",
     "min-width",
     "height",
     "display",
@@ -52,7 +53,63 @@ const STYLE_ALLOWED: &[&str] = &[
     "white-space",
     "word-break",
     "overflow-wrap",
+    "box-sizing",
+    "table-layout",
+    "list-style",
+    "list-style-type",
+    "text-transform",
+    "margin-block-start",
+    "margin-block-end",
 ];
+
+/// Inspect decoded CSS tokens, not substrings: escaped url() and image-set()
+/// must not bypass the remote-image policy through a background declaration.
+fn safe_css_value(value: &str) -> bool {
+    use cssparser::{Parser, ParserInput, Token};
+
+    fn check<'i>(parser: &mut Parser<'i, '_>) -> Result<(), cssparser::ParseError<'i, ()>> {
+        while !parser.is_exhausted() {
+            match parser.next_including_whitespace_and_comments()?.clone() {
+                Token::Function(name) => {
+                    if ![
+                        "rgb",
+                        "rgba",
+                        "hsl",
+                        "hsla",
+                        "calc",
+                        "min",
+                        "max",
+                        "clamp",
+                        "linear-gradient",
+                        "radial-gradient",
+                        "conic-gradient",
+                        "repeating-linear-gradient",
+                        "repeating-radial-gradient",
+                    ]
+                    .contains(&name.to_ascii_lowercase().as_str())
+                    {
+                        return Err(parser.new_custom_error(()));
+                    }
+                    parser.parse_nested_block(check)?;
+                }
+                Token::UnquotedUrl(_)
+                | Token::BadUrl(_)
+                | Token::BadString(_)
+                | Token::AtKeyword(_)
+                | Token::CurlyBracketBlock
+                | Token::SquareBracketBlock => {
+                    return Err(parser.new_custom_error(()));
+                }
+                Token::ParenthesisBlock => parser.parse_nested_block(check)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    let mut input = ParserInput::new(value);
+    check(&mut Parser::new(&mut input)).is_ok()
+}
 
 fn filter_style(value: &str) -> Option<String> {
     let mut kept = Vec::new();
@@ -79,7 +136,8 @@ fn filter_style(value: &str) -> Option<String> {
         }
         let val_lower = val.to_lowercase();
         // No external fetches or layout escapes through CSS.
-        if val_lower.contains("url(")
+        if !safe_css_value(val)
+            || val_lower.contains("url(")
             || val_lower.contains("expression(")
             || val_lower.contains("fixed")
             || val_lower.contains("absolute")
@@ -90,7 +148,7 @@ fn filter_style(value: &str) -> Option<String> {
         // itself to the iframe viewport, which our auto-height measurement then
         // grows — a feedback loop that ratchets the frame up to its cap. Email
         // bodies never legitimately need one (images use height:auto).
-        if prop == "height"
+        if (prop == "height" || prop == "max-height")
             && (val_lower.contains('%')
                 || val_lower.contains("vh")
                 || val_lower.contains("vw")
@@ -140,6 +198,21 @@ pub fn sanitize_email_html(
     message_id: i64,
     allow_remote_images: bool,
 ) -> SanitizedHtml {
+    // Inlining happens BEFORE the security boundary. The result still passes
+    // through the exact same tag, URL and CSS allowlists below.
+    let inlined = css_inline::CSSInliner::options()
+        .load_remote_stylesheets(false)
+        .keep_style_tags(false)
+        .keep_link_tags(false)
+        .build()
+        .inline(html)
+        .unwrap_or_else(|_| html.to_string());
+    let document = dom_query::Document::from(inlined);
+    document.select("head").remove();
+    // Ammonia parses a fragment and discards html/body attributes. Convert
+    // their inlined presentation to ordinary wrappers so it survives cleaning.
+    document.select("html, body").rename("div");
+    let html = document.html().to_string();
     let blocked = Arc::new(AtomicUsize::new(0));
     let blocked_in_filter = blocked.clone();
 
@@ -245,7 +318,7 @@ pub fn sanitize_email_html(
             Some(Cow::Borrowed(value))
         });
 
-    let html = builder.clean(html).to_string();
+    let html = builder.clean(&html).to_string();
     SanitizedHtml {
         html,
         blocked_images: blocked.load(Ordering::Relaxed),
@@ -291,6 +364,70 @@ fn linkify(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_styles_keep_logo_and_message_constraints() {
+        let rendered = sanitize_email_html(
+            include_str!("../../../tests/fixtures/email-rendering.html"),
+            1,
+            false,
+        );
+        assert!(rendered.html.contains("max-width:120px"));
+        assert!(rendered.html.contains("max-height:40px"));
+        assert!(rendered.html.contains("max-width:660px"));
+        assert!(rendered.html.contains("display:none"));
+        assert!(!rendered.html.contains("<style"));
+        assert!(!rendered.html.contains("class="));
+        assert!(rendered.html.contains("http://skim-cid.localhost/1/logo"));
+    }
+
+    #[test]
+    fn body_colors_survive_fragment_sanitization() {
+        let rendered = sanitize_email_html(
+            "<html><head><style>body { background-color: #fff; color: #111 }</style></head><body><p>Hello</p></body></html>",
+            1,
+            false,
+        );
+        assert!(rendered.html.contains("background-color:#fff"));
+        assert!(rendered.html.contains("color:#111"));
+    }
+
+    #[test]
+    fn inlining_never_trusts_stylesheet_urls_or_scripts() {
+        let rendered = sanitize_email_html(
+            r#"<link rel="stylesheet" href="file:///not-readable.css">
+            <style>@import url('https://tracker.example/style.css');
+              .x { max-width:120px; background-image:url('https://tracker.example/pixel'); position:fixed; }
+            </style><p class="x" onclick="bad()">Hello<script>bad()</script></p>
+            <img src="https://tracker.example/image">"#,
+            1,
+            false,
+        );
+        assert!(rendered.html.contains("max-width:120px"));
+        assert!(!rendered.html.contains("tracker.example"));
+        assert!(!rendered.html.contains("file:"));
+        assert!(!rendered.html.contains("script"));
+        assert!(!rendered.html.contains("onclick"));
+        assert!(!rendered.html.contains("fixed"));
+        assert_eq!(rendered.blocked_images, 1);
+    }
+
+    #[test]
+    fn css_tokens_reject_escaped_and_indirect_image_fetches() {
+        for value in [
+            r"background:u\72l(https://tracker.example/x)",
+            r#"background:image-set("https://tracker.example/x" 1x)"#,
+            "background:var(--remote)",
+            "height:calc(100vh - 10px)",
+            "max-height:100%",
+        ] {
+            assert_eq!(filter_style(value), None, "{value}");
+        }
+        assert_eq!(
+            filter_style("background:rgb(1, 2, 3)"),
+            Some("background:rgb(1, 2, 3)".into())
+        );
+    }
 
     #[test]
     fn strips_scripts_and_event_handlers() {
