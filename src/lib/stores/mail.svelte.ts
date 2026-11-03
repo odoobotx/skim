@@ -567,13 +567,20 @@ export const mail = {
     await refreshThreads();
     if (on) void api.syncNow(activeAccount()?.id).catch(() => {});
   },
+  async setPriority(row: ThreadRow, priority: boolean) {
+    const key=rowKey(row);
+    state.threads=state.threads.map(item=>rowKey(item)===key ? {...item,isPriority:priority} : item);
+    try {await api.setTaskPriority(row,priority);}
+    catch(error) {await refreshThreads();throw error;}
+    await refreshThreads();
+  },
   async setDone(row: ThreadRow, done: boolean) {
     await this.setDoneRows([row], done);
   },
   async setDoneRows(rows: ThreadRow[], done: boolean) {
     const keys = new Set(rows.map(rowKey));
     state.threads = state.threads.flatMap(row => keys.has(rowKey(row))
-      ? done && !state.showDone ? [] : [{ ...row, isDone: done, isRead: done || row.isRead, pendingMove: true }] : [row]);
+      ? done && !state.showDone ? [] : [{ ...row, isDone: done, isRead: done || row.isRead, isPriority: done ? false : row.isPriority, pendingMove: true }] : [row]);
     if (done && !state.showDone && rows.some(row => row.id === state.selectedThreadId)) {
       state.selectedThreadId = null;
       state.selectedMessageId = null;

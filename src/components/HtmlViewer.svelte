@@ -2,6 +2,7 @@
   // Renders sanitized email HTML inside a sandboxed iframe (no scripts) with
   // a strict CSP. Links open in the system browser; height tracks content.
   import { buildEmailDocument } from "../lib/email-document";
+  import { withoutQuotedHistory } from "../lib/quoted-history";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ui } from "../lib/stores/ui.svelte";
   import { t } from "../lib/i18n/index.svelte";
@@ -12,6 +13,7 @@
     security = null,
     onHoverUrl,
     appearance = "theme",
+    trimQuotes = false,
   }: {
     html: string;
     /** Per-link phishing verdicts from the backend, keyed by raw href. */
@@ -19,6 +21,7 @@
     /** Reports the real destination under the cursor (null = left links). */
     onHoverUrl?: (url: string | null) => void;
     appearance?: "theme" | "original";
+    trimQuotes?: boolean;
   } = $props();
 
   let iframe: HTMLIFrameElement | undefined = $state();
@@ -114,8 +117,11 @@
       "#ffffff"
     );
   });
+  let revealQuotes = $state(false);
+  $effect(() => {void html;revealQuotes=false;});
+  const reply=$derived(trimQuotes ? withoutQuotedHistory(html) : {html,hasQuoted:false});
   const srcdoc = $derived(
-    buildEmailDocument(html, ui.effective === "dark" && !original, original, surface),
+    buildEmailDocument(revealQuotes ? html : reply.html, ui.effective === "dark" && !original, original, surface),
   );
 
   function setupDoc(doc: Document) {
@@ -288,6 +294,9 @@
   onload={onLoad}
   style="height: {height}px"
 ></iframe>
+{#if reply.hasQuoted}
+  <button class="quoted-toggle" aria-expanded={revealQuotes} onclick={() => revealQuotes=!revealQuotes}>{revealQuotes ? "Hide quoted history" : "Show quoted history"}</button>
+{/if}
 
 {#if zoom}
   <dialog bind:this={imageDialog} class="image-dialog" aria-label={t("render.view_image")}
@@ -319,6 +328,8 @@
 {/if}
 
 <style>
+  .quoted-toggle { padding:7px 10px; margin-top:8px; border:1px solid var(--hairline); border-radius:7px; font-size:11px; color:var(--text-dim); }
+  .quoted-toggle:hover { background:var(--hover); }
   .image-dialog { max-width: 95vw; max-height: 90vh; padding: 16px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; color: #17171b; overflow: auto; }
   .image-dialog::backdrop { background: #0009; }
   .image-dialog img { display: block; max-width: 85vw; max-height: 75vh; object-fit: contain; }

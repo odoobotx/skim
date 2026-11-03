@@ -56,6 +56,20 @@ try {
   await page.locator("nav.sidebar").getByRole("button", { name: /^Archive/ }).waitFor();
   await page.locator("nav.sidebar").getByRole("button", { name: "More", exact: true }).click();
   assert.equal(await list.locator("button.row").filter({hasText:"Anna Weber"}).count(), 2, "Personal senders start ungrouped");
+  const individual=list.locator(".message-wrap").filter({hasText:"A separate conversation with Anna"});
+  await individual.getByRole("button",{name:"Mark message Priority",exact:true}).click();
+  await list.locator(".priority button.row").filter({hasText:"A separate conversation with Anna"}).waitFor();
+  assert.equal(await list.locator(".priority button.row").filter({hasText:"Q3 launch"}).count(),0,"Priority must not promote every message from the sender");
+  assert.equal(await page.evaluate(async()=>(await import("/src/lib/stores/mail.svelte.ts")).mail.selectedThreadId),null,"Hover action must not open the message");
+  await page.reload();await page.getByRole("button",{name:"Check Inbox"}).click();
+  await individual.getByRole("button",{name:"Remove message Priority",exact:true}).click();
+  await page.waitForFunction(()=>JSON.parse(localStorage.getItem("skimdemo.priority") ?? "[]").length===0);
+  await page.evaluate(()=>localStorage.setItem("skimdemo.failPriority","on"));
+  await individual.getByRole("button",{name:"Mark message Priority",exact:true}).click();
+  await page.locator("nav.sidebar .sync.error").waitFor();
+  await individual.getByRole("button",{name:"Mark message Priority",exact:true}).waitFor();
+  await page.evaluate(()=>localStorage.removeItem("skimdemo.failPriority"));
+
   await list.locator("button.row").filter({hasText:"Anna Weber"}).first().click({button:"right"});
   await page.getByRole("menuitem", {name:"Group by Sender",exact:true}).click();
   await list.getByRole("button", { name: /^Anna Weber/ }).click();
@@ -117,6 +131,22 @@ try {
   assert.equal(await list.locator("[data-done-ids]").count(), 0);
   await page.locator("nav.sidebar").getByRole("button", { name: /^Inbox/ }).click();
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
+  await page.evaluate(()=>localStorage.setItem("skimdemo.longEmail","on"));
+  async function checkReadingScroll() {
+    await page.waitForFunction(()=> {
+      const el=document.querySelector(".reading-host .scroll");
+      return el && el.scrollHeight>el.clientHeight+600;
+    });
+    const scroll=page.locator(".reading-host .scroll");
+    const iframe=page.locator(".reading-host iframe");
+    await iframe.waitFor();
+    const box=await iframe.boundingBox();
+    await page.mouse.move(box.x+Math.min(box.width/2,200),Math.max(150,Math.min(box.y+70,800)));
+    await page.mouse.wheel(0,650);
+    await page.waitForFunction(()=>document.querySelector(".reading-host .scroll").scrollTop>200);
+    assert(await scroll.evaluate(el=>el.getBoundingClientRect().bottom<=window.innerHeight),"Reading scroller must remain inside the window");
+    assert(await page.locator(".reading-host footer.actions").isVisible(),"Reply actions remain reachable");
+  }
   // Account-level layout applies to categories and sender drill-downs alike.
   await page.locator("nav.sidebar").getByRole("button", {name:/Settings$/}).click();
   await page.getByLabel("All inboxes reading layout",{exact:true}).selectOption("split");
@@ -124,6 +154,10 @@ try {
   assert(await page.locator(".list-host.split").isVisible());
   assert(await page.locator(".reading-host").isVisible());
   await page.getByText("Browse messages",{exact:true}).waitFor();
+  await list.locator("button.row").first().click();
+  await checkReadingScroll();
+  await page.keyboard.press("Escape");
+
   await page.locator("nav.sidebar").getByRole("button", {name:/Settings$/}).click();
   await page.getByLabel("All inboxes reading layout",{exact:true}).selectOption("full");
   await page.locator(".overlay .close").click();
@@ -132,6 +166,9 @@ try {
   await page.getByRole("button", {name:"← Back to list",exact:true}).waitFor();
   assert(!(await page.locator(".list-host").isVisible()), "Full-width email replaces the list");
   await page.locator(".reading-host .toolbar").getByText("Browse messages",{exact:true}).waitFor();
+  assert.equal(await page.locator(".conversation-card").count(),2,"The conversation is visible as cards without earlier/later accordions");
+  assert.equal(await page.locator(".thread-more").count(),0);
+  await checkReadingScroll();
   // Account appearance applies immediately to an open email in All inboxes.
   await page.waitForFunction(() => {
     const body=document.querySelector("iframe")?.contentDocument?.body;

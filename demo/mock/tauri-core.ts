@@ -10,6 +10,7 @@ import { emitDemo } from "./tauri-event";
 // Used only by headless tests, with this synthetic mailbox.
 export const commandLog: { cmd: string; args: any }[] = [];
 const savedSettings: Record<string, string> = JSON.parse(localStorage.getItem("skimdemo.settings") ?? "{}");
+const priorityRows=new Set<number>(JSON.parse(localStorage.getItem("skimdemo.priority") ?? "[]"));
 const doneRows = new Set<number>(JSON.parse(localStorage.getItem("skimdemo.done") ?? "[]"));
 const readRows = new Set<number>([...doneRows, ...JSON.parse(localStorage.getItem("skimdemo.read") ?? "[]")]);
 if (localStorage.getItem("skimdemo.taskInbox") === "on") {
@@ -210,18 +211,24 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "list_recent_unread":
     case "list_task_inbox": {
       const rows = MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row => ({...row, accountId: db.ACCOUNT.id}));
-      return ok(rows.filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)) && (cmd !== "list_recent_unread" || !(row.isRead || readRows.has(row.id))))
-        .map(row => ({...row, isDone: doneRows.has(row.id), isRead:row.isRead || readRows.has(row.id), pendingMove: false,
+      return ok([...rows].sort((a,b)=>cmd === "list_recent_unread" ? b.date-a.date : Number(priorityRows.has(b.id))-Number(priorityRows.has(a.id)) || b.date-a.date).filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)) && (cmd !== "list_recent_unread" || !(row.isRead || readRows.has(row.id))))
+        .map(row => ({...row, isDone: doneRows.has(row.id), isRead:row.isRead || readRows.has(row.id), pendingMove: false,isPriority:priorityRows.has(row.id),
           category: row.fromAddr.includes("github") ? "notifications" : row.fromAddr.includes("stripe") ? "newsletters" : "mail"}))
         .slice(args.offset ?? 0, cmd === "list_recent_unread" ? 5 : args.offset + args.limit));
     }
+    case "set_task_priority":
+      if (localStorage.getItem("skimdemo.failPriority") === "on") return Promise.reject(new Error("Synthetic Priority failure"));
+      if (args.priority) priorityRows.add(args.threadId); else priorityRows.delete(args.threadId);
+      localStorage.setItem("skimdemo.priority",JSON.stringify([...priorityRows]));
+      return ok(undefined);
     case "set_tasks_done":
     case "set_thread_done": {
       if (localStorage.getItem("skimdemo.failArchive") === "on") return Promise.reject(new Error("Synthetic archive failure"));
       for (const id of args.threadIds ?? [args.threadId]) {
-        if (args.done) {doneRows.add(id);readRows.add(id);} else doneRows.delete(id);
+        if (args.done) {doneRows.add(id);readRows.add(id);priorityRows.delete(id);} else doneRows.delete(id);
       }
       localStorage.setItem("skimdemo.done", JSON.stringify([...doneRows]));
+      localStorage.setItem("skimdemo.priority",JSON.stringify([...priorityRows]));
       localStorage.setItem("skimdemo.read", JSON.stringify([...readRows]));
       queueMicrotask(() => emitDemo("folders:updated",{}));
       return ok(undefined);
@@ -229,12 +236,18 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "get_thread": {
       const detail = db.threadDetail(args.threadId);
       if (localStorage.getItem("skimdemo.taskInbox") === "on" && detail.messages.length) {
-        detail.messages.push({ ...detail.messages[0], id: 99999, folderId: 3 });
+        detail.messages.unshift({ ...detail.messages[0], id: 99999, folderId: 3, date:detail.messages[0].date-3600,
+          from:{name:"Alex Morgan",addr:"alex@brightwave.io"},snippet:"Here is my earlier reply." });
       }
       return ok(detail);
     }
-    case "get_message_body":
-      return ok(db.renderedBody(args.messageId));
+    case "get_message_body": {
+      const body=db.renderedBody(args.messageId);
+      if (localStorage.getItem("skimdemo.longEmail") === "on") {
+        body.html=`<p>Long email start</p>${Array.from({length:65},(_,i)=>`<p>Long email paragraph ${i+1}. This content verifies the reading pane scrolls naturally.</p>`).join("")}<p>Long email end</p>`;
+      }
+      return ok(body);
+    }
     case "archive_messages":
       if (localStorage.getItem("skimdemo.failArchive") === "on") return Promise.reject(new Error("Synthetic archive failure"));
       return ok(undefined);

@@ -42,6 +42,7 @@ export interface Folder {
 }
 
 export interface ThreadRow {
+  isPriority?: boolean;
   isDone?: boolean;
   pendingMove?: boolean;
   category?: "mail" | "notifications" | "newsletters";

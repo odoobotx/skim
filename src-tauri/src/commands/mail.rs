@@ -148,6 +148,22 @@ pub async fn list_task_inbox(
 }
 
 #[tauri::command]
+pub async fn set_task_priority(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    thread_id: i64,
+    message_id: Option<i64>,
+    priority: bool,
+) -> Result<()> {
+    state
+        .db
+        .call(move |conn| tasks::set_priority(conn, thread_id, message_id, priority))
+        .await?;
+    let _ = app.emit("mail:updated", json!({}));
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_thread_done(
     app: AppHandle,
     state: State<'_, AppState>,

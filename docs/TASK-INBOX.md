@@ -36,10 +36,26 @@ current preview has reached it.
   choose Group by Sender. Rules use the exact normalized address and persist
   across subjects and accounts; Ungroup Sender reverses the choice.
 - Sender drill-downs within category drill-downs.
-- Priority sender rules, independent of message stars/pins, with a top section.
+- Individual message/conversation Priority: hover a row and use the bolt, or use
+  its context menu. This local flag is independent of server stars and sender
+  rules. Explicit Priority cards remain visible above capped sender priorities;
+  queries page Priority mail first even when it is older than the first page.
+  Done clears individual Priority. Label-folder copies share the same local flag.
+- Priority sender rules remain separately available for future mail from a sender.
+- Notifications also recognize DMARC report-subject signatures and NAS/system
+  notice signals from sender name, address and subject, including existing cache
+  entries with no automation/list headers. Human reply/forward discussions and
+  vendor newsletters have negative fixtures to limit over-classification.
 - Automatic Notifications/Newsletters classification from headers and sender signals,
   with explicit sender corrections saved in local settings.
 - Full-window nature Home screen with Search, Compose, Check Inbox and recent unread mail.
+- Conversation view shows chronological incoming/outgoing cards without the
+  earlier/later accordion controls. Cached snippets keep other cards lightweight;
+  opening one fetches its body on demand. Known reply-history containers collapse
+  behind Show quoted history; ordinary blockquotes and quote-only mail remain
+  visible. The stored email is preserved.
+- Reading panes now constrain flex height so long mail scrolls in full and split
+  layouts, including wheel input over the email iframe. Browser tests cover both.
 - Per-account reading layout: Full-width (default), opening an email in place
   with Back to return, or Split with a persistent list beside the reading pane.
   The same layout applies inside category and sender drill-downs. All inboxes
@@ -202,7 +218,8 @@ Behavior reference: https://sparkmailapp.com/help/manage-your-inbox/mark-as-done
    https://sparkmailapp.com/help/manage-your-inbox/customize-your-inbox
 3. **Recipient/To grouping:** expose recipient metadata through list queries and
    define multi-recipient membership before implementing.
-4. **Pins:** expose a compact pinned group independently from Priority senders.
+4. **Pins:** a separate saved-reference group, if useful, remains distinct from
+   the new individual Priority bolt and from Priority sender rules.
 5. **Navigation polish:** remembered drill-down scroll positions. Keep secondary
    controls out of idle rows.
 6. **Platform validation:** Windows previews build through CI. Linux requires
@@ -279,3 +296,10 @@ The browser test starts a temporary local Vite server and a separate **headless*
 browser using synthetic fixture mail. It never opens a desktop window or reads a
 real mailbox. Set `SKIM_TEST_BROWSER` to an existing Chromium executable to avoid
 downloading another test browser. Preview output: `demo/output/task-inbox.png`.
+
+## Priority reference — 2026-11-03
+
+Spark documents Pins separately from Priority senders/threads, including an
+individual hover Priority action. The consulted page does not establish its
+server-star mapping. This fork keeps local Priority separate from IMAP stars.
+https://sparkmailapp.com/help/sending-emails/pin-and-priority

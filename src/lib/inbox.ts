@@ -72,5 +72,5 @@ export function groupInbox(rows: ThreadRow[], mode: GroupBy): InboxGroup[] {
 /** Explicit sender corrections override the backend's header classification. */
 export function inboxSection(row: ThreadRow, rules: SenderRules): "priority" | Category {
   const rule = Object.hasOwn(rules, senderAddress(row)) ? rules[senderAddress(row)] : undefined;
-  return rule?.priority ? "priority" : rule?.category ?? row.category ?? "mail";
+  return row.isPriority || rule?.priority ? "priority" : rule?.category ?? row.category ?? "mail";
 }

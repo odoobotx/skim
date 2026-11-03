@@ -212,7 +212,9 @@
   .show-done input:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
   @media(prefers-reduced-motion:reduce) { .show-done input,.show-done input::before { transition:none; } }
   .list.wide { width:auto; flex:1; }
-  .list.wide :global(.row) { display:grid; grid-template-columns:minmax(150px,25%) minmax(120px,1fr) minmax(0,1.7fr) 60px; align-items:center; gap:16px; min-height:48px; padding:8px 78px 8px 42px; border-radius:9px; }
+  .list:not(.wide) :global(.row-wrap:has(.priority-check) .subject),
+  .list:not(.wide) :global(.row-wrap:has(.priority-check) .snippet) { padding-right:82px; }
+  .list.wide :global(.row) { display:grid; grid-template-columns:minmax(150px,25%) minmax(120px,1fr) minmax(0,1.7fr) 60px; align-items:center; gap:16px; min-height:48px; padding:8px 106px 8px 42px; border-radius:9px; }
   .list.wide :global(.line1) { display:contents; }
   .list.wide :global(.from) { grid-column:1; grid-row:1; }
   .list.wide :global(.date) { grid-column:4; grid-row:1; text-align:right; }

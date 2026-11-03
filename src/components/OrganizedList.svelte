@@ -21,7 +21,8 @@
   let limit = $state(100);
   const displayRows = $derived(sweep.length ? snapshot : mail.threads);
   const priorityRows = $derived(displayRows.filter(row => inboxSection(row, rules) === "priority"));
-  const priorityGroups = $derived(senderGroups(priorityRows, rules));
+  const pinnedRows = $derived(priorityRows.filter(row => row.isPriority));
+  const priorityGroups = $derived(senderGroups(priorityRows.filter(row => !row.isPriority), rules));
   const ordinaryGroups = $derived(senderGroups(displayRows.filter(row => inboxSection(row, rules) === "mail"), rules));
   const scoped = $derived(!isInbox || (category === null && sender === null) ? displayRows
     : displayRows.filter(row => inboxSection(row, rules) === (category ?? "mail")));
@@ -39,7 +40,7 @@
   $effect(() => {
     const rows = sender !== null ? openedRows.slice(0, limit)
       : isInbox && category === null
-        ? [...priorityGroups.slice(0,5).filter(g => g.rows.length === 1).flatMap(g => g.rows), ...ordinaryGroups.slice(0, limit).filter(g => g.rows.length === 1).flatMap(g => g.rows)]
+        ? [...pinnedRows, ...priorityGroups.slice(0,5).filter(g => g.rows.length === 1).flatMap(g => g.rows), ...ordinaryGroups.slice(0, limit).filter(g => g.rows.length === 1).flatMap(g => g.rows)]
         : groups.slice(0, limit).filter(g => g.rows.length === 1).flatMap(g => g.rows);
     mail.setNavigationRows(rows.map(rowKey));
   });
@@ -66,6 +67,11 @@
     } finally {
       busy = busy.filter(key => key !== rowKey(row));
     }
+  }
+
+  async function priority(row: ThreadRow) {
+    try { await mail.setPriority(row,!row.isPriority); }
+    catch(error) { reportError("inbox.priority",error); mail.noteError(t("ops.failed")); }
   }
 
   let pointer: number | null = null;
@@ -143,6 +149,7 @@
     <header>{menu.row.fromName}<br />{senderAddress(menu.row)}</header>
     <button role="menuitem" onclick={() => choose({group: !rules[senderAddress(menu!.row)]?.group})}>{rules[senderAddress(menu.row)]?.group ? "Ungroup Sender" : "Group by Sender"}</button>
     {#if isInbox}
+      {#if !menu.row.isDone}<button role="menuitem" onclick={() => { const row=menu!.row; menu=null; void priority(row); }}>{menu.row.isPriority ? "Remove message Priority" : "Mark message Priority"}</button>{/if}
       <button role="menuitem" onclick={() => choose({priority: !rules[senderAddress(menu!.row)]?.priority})}>{rules[senderAddress(menu.row)]?.priority ? "Remove Priority sender" : "Make Priority sender"}</button>
       <div class="section-label">Move sender to</div>
       <button role="menuitem" onclick={() => choose({category:"mail"})}>People</button>
@@ -185,6 +192,7 @@
     ontoggle={(extend) => mail.toggleRow(rowKey(row), extend)}
     ondone={isInbox ? () => void done(row) : undefined}
     ondonepointer={isInbox ? (event) => begin([row], event) : undefined}
+    onpriority={isInbox && !row.isDone ? () => void priority(row) : undefined}
     completing={sweep.includes(rowKey(row))}
     oncontextmenu={(event) => context(row,event)}
   />
@@ -197,6 +205,7 @@
   {#if priorityRows.length}
     <div class="priority">
       <h2>{t("inbox.priority")}</h2>
+      {#each pinnedRows as row (rowKey(row))}{@render message(row)}{/each}
       {#each priorityGroups.slice(0, 5) as group (group.key)}
         {#if group.rows.length === 1}{@render message(group.rows[0])}
         {:else}{@render summary(group.label,group.rows,() => navigate("priority",group.key),group.rows[0])}{/if}

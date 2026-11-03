@@ -29,6 +29,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0015_account_imap_user.sql"),
     include_str!("migrations/0016_redecode_cjk.sql"),
     include_str!("migrations/0017_task_inbox.sql"),
+    include_str!("migrations/0018_message_priority.sql"),
 ];
 
 /// A read the user is waiting on has this long to answer before it is worth

@@ -37,6 +37,8 @@ pub fn task_ids(
 
 pub fn category(
     from: &str,
+    name: &str,
+    subject: &str,
     list: bool,
     unsubscribe: bool,
     auto: &str,
@@ -46,9 +48,28 @@ pub fn category(
     let precedence = precedence.trim().to_ascii_lowercase();
     let from = from.to_ascii_lowercase();
     let (local, domain) = from.rsplit_once('@').unwrap_or((&from, ""));
+    let subject = subject.trim().to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    let is_reply = ["re:", "fw:", "fwd:"]
+        .iter()
+        .any(|prefix| subject.trim_start().starts_with(prefix));
+    let report = subject.starts_with("report domain:")
+        && (subject.contains("submitter:") || subject.contains("report-id:"));
+    let nas_word = |text: &str| {
+        text.split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| {
+                matches!(
+                    word,
+                    "nas" | "synology" | "qnap" | "truenas" | "readynas" | "asustor"
+                )
+            })
+    };
+    let nas_notice = (nas_word(local) || nas_word(&name)) && nas_word(&subject)
+        || nas_word(&name) && (name.contains("notification") || name.contains("system"));
     if ["github.com", "gitlab.com", "bitbucket.org"]
         .iter()
         .any(|d| domain == *d || domain.ends_with(&format!(".{d}")))
+        || !is_reply && (report || nas_notice)
     {
         "notifications"
     } else if list || unsubscribe || matches!(precedence.as_str(), "bulk" | "list") {
@@ -85,6 +106,26 @@ pub struct TaskRow {
     pub is_done: bool,
     pub pending_move: bool,
     pub category: String,
+    pub is_priority: bool,
+}
+
+pub fn set_priority(
+    conn: &Connection,
+    thread: i64,
+    message: Option<i64>,
+    priority: bool,
+) -> rusqlite::Result<()> {
+    let ids = task_ids(
+        conn,
+        &[thread],
+        &message.into_iter().collect::<Vec<_>>(),
+        true,
+    )?;
+    conn.execute("UPDATE messages AS m SET is_priority=?2 WHERE
+      (m.id IN (SELECT value FROM json_each(?1)) OR (m.account_id,m.message_id) IN
+        (SELECT account_id,message_id FROM messages WHERE id IN (SELECT value FROM json_each(?1)) AND message_id IS NOT NULL))
+      AND m.folder_id IN (SELECT id FROM folders WHERE role IN ('inbox','archive','all'))",params![json!(ids).to_string(),priority])?;
+    Ok(())
 }
 
 pub fn list_inbox(
@@ -116,10 +157,20 @@ fn inbox_rows(
     unread_only: bool,
 ) -> rusqlite::Result<Vec<TaskRow>> {
     // Page thread IDs before windowing wide header rows, keeping large archives cheap.
-    let candidates = if grouped {
-        ", page_items AS (SELECT item FROM raw_scope GROUP BY item ORDER BY MAX(date) DESC,item DESC LIMIT ?4 OFFSET ?5)"
+    let order = if unread_only {
+        "MAX(date) DESC,item DESC"
     } else {
+        "MAX(is_priority) DESC,MAX(date) DESC,item DESC"
+    };
+    let candidates = if grouped {
+        format!(", page_items AS (SELECT item FROM raw_scope GROUP BY item ORDER BY {order} LIMIT ?4 OFFSET ?5)")
+    } else {
+        String::new()
+    };
+    let priority_order = if unread_only {
         ""
+    } else {
+        "priority_all DESC,"
     };
     let page_filter = if grouped {
         "WHERE item IN (SELECT item FROM page_items)"
@@ -150,13 +201,14 @@ fn inbox_rows(
              MAX(is_starred) OVER (PARTITION BY item) AS any_star,
              MAX(local_move) OVER (PARTITION BY item) AS pending_all,
              COUNT(*) OVER (PARTITION BY item) AS n,
+             MAX(is_priority) OVER (PARTITION BY item) AS priority_all,
              MAX(has_attachments) OVER (PARTITION BY item) AS any_attachment,
              MAX(date) OVER (PARTITION BY item) AS last_date
            FROM scope
          ) SELECT thread_id,id,account_id,from_name,from_addr,subject,snippet,last_date,
              all_read,any_star,any_attachment,n,NOT outstanding,pending_all,list_id,
-             list_unsubscribe,auto_submitted,precedence
-           FROM ranked WHERE rank=1 ORDER BY last_date DESC,item DESC {pagination}"
+             list_unsubscribe,auto_submitted,precedence,priority_all
+           FROM ranked WHERE rank=1 ORDER BY {priority_order}last_date DESC,item DESC {pagination}"
     );
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
@@ -164,6 +216,8 @@ fn inbox_rows(
             params![account, show_done, grouped, limit, offset, unread_only],
             |r| {
                 let address = r.get::<_, Option<String>>(4)?.unwrap_or_default();
+                let name = r.get::<_, Option<String>>(3)?.unwrap_or_default();
+                let subject = r.get::<_, Option<String>>(5)?.unwrap_or_default();
                 let list: Option<String> = r.get(14)?;
                 let unsubscribe: Option<String> = r.get(15)?;
                 let auto = r.get::<_, Option<String>>(16)?.unwrap_or_default();
@@ -171,24 +225,28 @@ fn inbox_rows(
                 Ok(TaskRow {
                     category: category(
                         &address,
+                        &name,
+                        &subject,
                         list.is_some(),
                         unsubscribe.is_some(),
                         &auto,
                         &precedence,
                     )
                     .into(),
+                    is_priority: r.get(18)?,
                     is_done: r.get(12)?,
                     pending_move: r.get(13)?,
                     row: ThreadRow {
                         id: r.get(0)?,
                         message_id: if grouped { None } else { Some(r.get(1)?) },
                         account_id: r.get(2)?,
-                        from_name: r
-                            .get::<_, Option<String>>(3)?
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| address.clone()),
+                        from_name: if name.is_empty() {
+                            address.clone()
+                        } else {
+                            name
+                        },
                         from_addr: address,
-                        subject: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                        subject,
                         snippet: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                         date: r.get(7)?,
                         is_read: r.get(8)?,
@@ -231,7 +289,10 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
             accounts.push(account.clone());
         }
         if done {
-            tx.execute("UPDATE messages SET is_read=1 WHERE id=?1", [id])?;
+            tx.execute(
+                "UPDATE messages SET is_read=1,is_priority=0 WHERE id=?1",
+                [id],
+            )?;
             tx.execute(
                 "UPDATE cached_moves SET read_override=1 WHERE message_id=?1",
                 [id],
@@ -561,29 +622,159 @@ mod tests {
     #[test]
     fn classification_uses_headers_without_reclassifying_human_mail() {
         assert_eq!(
-            category("human@example.com", false, false, "No", ""),
+            category("human@example.com", "", "", false, false, "No", ""),
             "mail"
         );
         assert_eq!(
-            category("news@example.com", true, false, "", ""),
+            category("news@example.com", "", "", true, false, "", ""),
             "newsletters"
         );
         assert_eq!(
-            category("news@example.com", false, false, "", " BULK "),
+            category("news@example.com", "", "", false, false, "", " BULK "),
             "newsletters"
         );
         assert_eq!(
-            category("notifications@github.com", true, true, "", ""),
+            category("notifications@github.com", "", "", true, true, "", ""),
             "notifications"
         );
         assert_eq!(
-            category("alerts+orders@example.com", false, false, "", ""),
+            category("alerts+orders@example.com", "", "", false, false, "", ""),
             "notifications"
         );
         assert_eq!(
-            category("human@example.com", false, false, "auto-generated", ""),
+            category(
+                "human@example.com",
+                "",
+                "",
+                false,
+                false,
+                "auto-generated",
+                ""
+            ),
             "notifications"
         );
+    }
+
+    #[test]
+    fn reports_and_nas_notices_use_message_signals_without_hiding_human_discussions() {
+        for (from, name, subject, list, expected) in [
+            (
+                "dmarc@example.com",
+                "DMARC report",
+                "Report domain: example.net Submitter: example.com Report-ID: abc",
+                false,
+                "notifications",
+            ),
+            (
+                "admin@example.com",
+                "Office NAS",
+                "[Office NAS] System status",
+                false,
+                "notifications",
+            ),
+            (
+                "service@example.com",
+                "Synology System Notification",
+                "Backup task completed",
+                false,
+                "notifications",
+            ),
+            (
+                "person@example.com",
+                "Jonas",
+                "Can we discuss the NAS backup?",
+                false,
+                "mail",
+            ),
+            (
+                "person@example.com",
+                "Alex",
+                "Re: Report domain: example.net Submitter: example.com",
+                false,
+                "mail",
+            ),
+            (
+                "admin@example.com",
+                "Office NAS",
+                "Re: [Office NAS] Storage question",
+                false,
+                "mail",
+            ),
+            (
+                "marketing@example.com",
+                "Synology",
+                "Meet our new NAS",
+                true,
+                "newsletters",
+            ),
+        ] {
+            assert_eq!(
+                category(from, name, subject, list, false, "", ""),
+                expected,
+                "{subject}"
+            );
+        }
+    }
+
+    #[test]
+    fn message_priority_is_local_scoped_and_pages_before_older_mail() {
+        Db::open_in_memory()
+            .unwrap()
+            .with(|conn| {
+                seed(conn)?;
+                let first = message(1, 1, Some("<pin@example.com>"), 1);
+                let (id, thread) = add(conn, &first);
+                let mut copy = first.clone();
+                copy.folder_id = 4;
+                copy.uid = 101;
+                let (copy_id, _) = add(conn, &copy);
+                for uid in 2..=120 {
+                    let mut other = message(
+                        1,
+                        uid,
+                        Some(&format!("<p{uid}@example.com>")),
+                        i64::from(uid),
+                    );
+                    other.subject = Some(format!("Different conversation {uid}"));
+                    add(conn, &other);
+                }
+                set_priority(conn, thread, Some(id), true)?;
+                let rows = list_inbox(conn, None, false, true, 0, 10)?;
+                assert_eq!(rows[0].row.id, thread);
+                assert!(rows[0].is_priority && !rows[0].row.is_starred && !rows[0].row.is_read);
+                assert_eq!(rows.iter().filter(|row| row.is_priority).count(), 1);
+                assert!(conn.query_row::<bool, _, _>(
+                    "SELECT is_priority FROM messages WHERE id=?1",
+                    [copy_id],
+                    |r| r.get(0)
+                )?);
+                assert_eq!(
+                    conn.query_row::<i64, _, _>("SELECT COUNT(*) FROM pending_ops", [], |r| r
+                        .get(0))?,
+                    0
+                );
+                set_priority(conn, thread, Some(id), false)?;
+                assert!(!conn.query_row::<bool, _, _>(
+                    "SELECT is_priority FROM messages WHERE id=?1",
+                    [copy_id],
+                    |r| r.get(0)
+                )?);
+                assert!(list_inbox(conn, None, false, true, 0, 10)?
+                    .iter()
+                    .all(|row| !row.is_priority));
+                set_priority(conn, thread, None, true)?;
+                let ids = task_ids(conn, &[thread], &[], true)?;
+                set_done(conn, &ids, true)?;
+                assert!(
+                    !list_inbox(conn, None, true, true, 0, 200)?
+                        .iter()
+                        .find(|row| row.row.id == thread)
+                        .unwrap()
+                        .is_priority
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

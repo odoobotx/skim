@@ -63,3 +63,9 @@ test("sender grouping is opt-in, address-specific, and independently reversible"
   assert.deepEqual(senderGroups(rows,rules).map(group=>group.rows.map(row=>row.id)),[[1,3],[2]]);
   assert.equal(senderGroups(rows,parseSenderRules('{"anna@example.com":{"group":false}}')).length,3);
 });
+
+test("message Priority overrides category without promoting the whole sender", () => {
+  const rules={"person@example.com":{category:"newsletters"}};
+  assert.equal(inboxSection(row(1,"Person","person@example.com",{isPriority:true}),rules),"priority");
+  assert.equal(inboxSection(row(2,"Person","person@example.com"),rules),"newsletters");
+});

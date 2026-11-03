@@ -13,6 +13,7 @@
     ondonepointer,
     completing = false,
     oncontextmenu,
+    onpriority,
   }: {
     thread: ThreadRow;
     selected?: boolean;
@@ -23,6 +24,7 @@
     ondonepointer?: (event: PointerEvent) => void;
     completing?: boolean;
     oncontextmenu?: (event: MouseEvent) => void;
+    onpriority?: () => void;
   } = $props();
 
   // Which mailbox this row came from — shown only in the unified view, where
@@ -53,6 +55,12 @@
     <button class="done-check" data-done-ids={thread.messageId ?? thread.id} aria-label={thread.isDone ? "Mark Undone" : "Mark Done"}
       aria-pressed={thread.isDone || completing} onpointerdown={ondonepointer}
       onclick={(event) => { if (event.detail === 0) ondone?.(); }}>✓</button>
+  {/if}
+  {#if onpriority}
+    <button class="priority-check" class:active={thread.isPriority} aria-pressed={thread.isPriority ?? false}
+      aria-label={thread.isPriority ? "Remove message Priority" : "Mark message Priority"} title={thread.isPriority ? "Remove message Priority" : "Mark message Priority"} onclick={onpriority}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill={thread.isPriority ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M9.5 1.5L3 9h4l-.5 5.5L13 6H9l.5-4.5z" /></svg>
+    </button>
   {/if}
   <button
     class="check"
@@ -86,6 +94,11 @@
 </div>
 
 <style>
+  .priority-check { position:absolute; right:68px; top:50%; transform:translateY(-50%); width:25px; height:28px; display:grid; place-items:center; border-radius:7px; opacity:0; color:var(--text-dim); }
+  .row-wrap:hover .priority-check,.priority-check:focus-visible,.priority-check.active { opacity:1; }
+  .priority-check:hover { background:var(--hover); }
+  .priority-check.active { color:var(--accent); }
+  @media(hover:none) { .priority-check { opacity:1; } }
   .sender-avatar { width:26px; height:26px; border-radius:50%; flex-shrink:0; display:grid; place-items:center; font-size:9px; font-weight:600; color:var(--text-dim); background:color-mix(in srgb,#749f9a 15%,var(--bg)); border:1px solid color-mix(in srgb,#749f9a 25%,transparent); }
   .done-check { position:absolute; left:8px; top:50%; transform:translateY(-50%); z-index:2; width:26px; height:28px; border-radius:8px; opacity:0; color:var(--text-dim); touch-action:none; }
   .row-wrap:hover .done-check, .done-check:focus-visible, .completed .done-check { opacity:1; }
@@ -167,7 +180,7 @@
     gap: 8px;
     /* Keeps the date clear of the checkbox slot. Only this line is set in —
        the subject and snippet still run the full width of the row. */
-    padding-right: 52px;
+    padding-right: 82px;
   }
   .from {
     font-size: 13.5px;

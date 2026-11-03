@@ -67,9 +67,6 @@
   // target it; newer messages collapse above it, older ones below. Defaults to
   // the latest-in-folder message on thread load.
   let focusedId = $state<number | null>(null);
-  // Accordion open state for the two collapsed sections around the focused one.
-  let laterOpen = $state(false);
-  let earlierOpen = $state(false);
   let focusedEl = $state<HTMLDivElement | undefined>();
 
   // The newest message of the thread IN THE CURRENT FOLDER — the default focus,
@@ -91,13 +88,6 @@
     const msgs = detail?.messages ?? [];
     return msgs.find((m) => m.id === focusedId) ?? latest;
   });
-
-  // Whole thread, newest first. Split around the focused message: `newer` sits
-  // collapsed above it ("later in thread"), `older` collapsed below ("earlier").
-  const ordered = $derived.by(() => [...(detail?.messages ?? [])].reverse());
-  const focusIdx = $derived(ordered.findIndex((m) => m.id === focused?.id));
-  const newer = $derived(focusIdx < 0 ? [] : ordered.slice(0, focusIdx));
-  const older = $derived(focusIdx < 0 ? [] : ordered.slice(focusIdx + 1));
 
   // The single message shown when not in conversation view: the one picked from
   // a flat list, else the newest in folder.
@@ -265,17 +255,9 @@
       const d = await api.getThread(threadId);
       if (mail.selectedThreadId !== threadId) return;
       detail = d;
-      // Focus the latest-in-folder message (the one just opened). Newer messages
-      // collapse above it, older ones below; a side's accordion opens by default
-      // only when it hides unread mail. Body loading follows `focused`/`shown`.
       const msgs = d.messages;
       const inFolder = msgs.filter((m) => m.folderId === mail.selectedFolderId);
-      const topId = (inFolder.length ? inFolder[inFolder.length - 1] : msgs[msgs.length - 1])?.id ?? null;
-      focusedId = topId;
-      const orderedNow = [...msgs].reverse();
-      const idx = orderedNow.findIndex((m) => m.id === topId);
-      laterOpen = idx > 0 && orderedNow.slice(0, idx).some((m) => !m.isRead);
-      earlierOpen = idx >= 0 && orderedNow.slice(idx + 1).some((m) => !m.isRead);
+      focusedId = (inFolder.length ? inFolder[inFolder.length - 1] : msgs[msgs.length - 1])?.id ?? null;
 
       const unread = d.messages.filter((m) => !m.isRead).map((m) => m.id);
       if (unread.length > 0) {
@@ -571,51 +553,17 @@
       </div>
 
       {#if conversation}
-        {#if newer.length > 0}
-          <div class="thread-more">
-            <button
-              class="more-toggle"
-              onclick={() => (laterOpen = !laterOpen)}
-              aria-expanded={laterOpen}
-            >
-              <span class="chev" class:open={laterOpen}>▸</span>
-              {t("reading.later", { n: newer.length })}
-            </button>
-            {#if laterOpen}
-              <div class="convo">
-                {#each newer as m (m.id)}
-                  {@render chatRow(m)}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-
-        {#if focused}
-          <div bind:this={focusedEl}>
-            {@render messageBlock(focused, bodies[focused.id])}
-          </div>
-        {/if}
-
-        {#if older.length > 0}
-          <div class="thread-more">
-            <button
-              class="more-toggle"
-              onclick={() => (earlierOpen = !earlierOpen)}
-              aria-expanded={earlierOpen}
-            >
-              <span class="chev" class:open={earlierOpen}>▸</span>
-              {t("reading.earlier", { n: older.length })}
-            </button>
-            {#if earlierOpen}
-              <div class="convo">
-                {#each older as m (m.id)}
-                  {@render chatRow(m)}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <div class="convo">
+          {#each detail.messages as m (m.id)}
+            <div class="conversation-card" class:outgoing={isOutgoing(m)} class:active={focused?.id === m.id}>
+              {#if focused?.id === m.id}
+                <div bind:this={focusedEl}>{@render messageBlock(m,bodies[m.id])}</div>
+              {:else}
+                {@render chatRow(m)}
+              {/if}
+            </div>
+          {/each}
+        </div>
       {:else if shown}
         {@render messageBlock(shown, bodies[shown.id])}
       {/if}
@@ -783,6 +731,7 @@
               <HtmlViewer
                 html={body.html}
                 appearance={mail.emailAppearanceFor(message.accountId)}
+                trimQuotes={conversation && (detail?.messages.length ?? 0)>1}
                 security={body.security?.links}
                 onHoverUrl={(u) => (hoverUrl = u)}
               />
@@ -794,6 +743,7 @@
           <HtmlViewer
             html={body.html}
                 appearance={mail.emailAppearanceFor(message.accountId)}
+                trimQuotes={conversation && (detail?.messages.length ?? 0)>1}
             security={body.security?.links}
             onHoverUrl={(u) => (hoverUrl = u)}
           />
@@ -870,6 +820,8 @@
     flex-direction: column;
     background: var(--surface);
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     /* Anchors the link-destination status bar. */
     position: relative;
   }
@@ -1028,6 +980,7 @@
      it back into view, while leaving the rest of a wide window unused. */
   .scroll {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 8px 36px 28px;
   }
@@ -1057,34 +1010,15 @@
   }
 
   /* ---- Conversation (chat) view ---- */
-  .thread-more {
-    margin-top: 8px;
-  }
-  .more-toggle {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 8px 4px;
-    color: var(--text-dim);
-    font-size: 12.5px;
-    font-weight: 600;
-  }
-  .more-toggle:hover {
-    color: var(--text);
-  }
-  .chev {
-    font-size: 10px;
-    transition: transform 0.12s;
-    display: inline-block;
-  }
-  .chev.open {
-    transform: rotate(90deg);
-  }
+  .conversation-card { min-width:0; border:1px solid var(--hairline); border-radius:14px; margin-right:24px; overflow:hidden; }
+  .conversation-card.active { border-color:var(--hairline-strong); }
+  .conversation-card.outgoing { margin-right:0; margin-left:24px; background:var(--hover); }
+  .conversation-card .message { padding:0 16px 16px; margin:0; border:0; }
   .convo {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    margin-top: 4px;
+    gap: 12px;
+    margin-top: 12px;
   }
   .chat-row {
     display: flex;
@@ -1092,7 +1026,7 @@
     gap: 10px;
     width: 100%;
     text-align: left;
-    padding: 6px 4px;
+    padding: 12px;
     transition: opacity 0.08s;
   }
   .avatar.sm {
@@ -1103,15 +1037,10 @@
   .chat-bubble {
     flex: 1;
     min-width: 0;
-    background: var(--hover);
-    border: 1px solid var(--hairline);
-    border-radius: 12px;
-    padding: 7px 11px;
-    transition: border-color 0.08s;
+    padding: 0;
+    border-radius: 8px;
   }
-  .chat-row:hover .chat-bubble {
-    border-color: var(--hairline-strong);
-  }
+  .chat-row:hover { background:var(--hover); }
   .chat-head {
     display: flex;
     justify-content: space-between;
@@ -1140,14 +1069,16 @@
     margin-top: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap:anywhere;
+    display:-webkit-box;
+    -webkit-line-clamp:3;
+    line-clamp:3;
+    -webkit-box-orient:vertical;
   }
   /* Outgoing (your own replies): mirrored to the right, tinted. */
   .chat-row.outgoing {
     flex-direction: row-reverse;
-  }
-  .chat-row.outgoing .chat-bubble {
-    background: var(--selected);
   }
 
   .meta {
