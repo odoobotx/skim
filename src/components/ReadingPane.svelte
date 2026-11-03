@@ -776,6 +776,7 @@
             <div class="body">
               <HtmlViewer
                 html={body.html}
+                appearance={mail.emailAppearanceFor(message.accountId)}
                 security={body.security?.links}
                 onHoverUrl={(u) => (hoverUrl = u)}
               />
@@ -786,6 +787,7 @@
         <div class="body">
           <HtmlViewer
             html={body.html}
+                appearance={mail.emailAppearanceFor(message.accountId)}
             security={body.security?.links}
             onHoverUrl={(u) => (hoverUrl = u)}
           />

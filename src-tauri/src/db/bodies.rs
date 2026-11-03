@@ -321,6 +321,7 @@ fn row_to_meta(r: &rusqlite::Row) -> rusqlite::Result<MessageMeta> {
     let list_unsubscribe: Option<String> = r.get(14)?;
     Ok(MessageMeta {
         id: r.get(0)?,
+        account_id: r.get(17)?,
         folder_id: r.get(1)?,
         thread_id: r.get(2)?,
         subject: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
@@ -347,7 +348,7 @@ pub fn get_thread(conn: &Connection, thread_id: i64) -> rusqlite::Result<Option<
     let mut stmt = conn.prepare_cached(
         "SELECT id, folder_id, thread_id, subject, from_name, from_addr, to_addrs, cc_addrs,
                 date, snippet, is_read, is_starred, has_attachments, body_state,
-                list_unsubscribe, list_unsubscribe_one_click, message_id
+                list_unsubscribe, list_unsubscribe_one_click, message_id, account_id
          FROM messages WHERE thread_id = ?1 ORDER BY date, id",
     )?;
     let mut seen: HashSet<String> = HashSet::new();

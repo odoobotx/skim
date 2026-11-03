@@ -129,12 +129,39 @@ try {
   await list.locator("button.row").first().click();
   await page.getByRole("button", {name:"← Back to list",exact:true}).waitFor();
   assert(!(await page.locator(".list-host").isVisible()), "Full-width email replaces the list");
+  // Account appearance applies immediately to an open email in All inboxes.
+  await page.waitForFunction(() => {
+    const body=document.querySelector("iframe")?.contentDocument?.body;
+    return body && getComputedStyle(body).backgroundColor!=="rgb(255, 255, 255)";
+  });
+  assert.equal(await page.getByLabel("Email appearance",{exact:true}).count(),0);
+  await page.locator("nav.sidebar").getByRole("button",{name:/Settings$/}).click();
+  await page.locator(".overlay .chevron").first().click();
+  assert.equal(await page.getByLabel("Email appearance",{exact:true}).inputValue(),"theme");
+  await page.getByLabel("Email appearance",{exact:true}).selectOption("original");
+  await page.locator(".overlay .close").click();
+  await page.waitForFunction(() => {
+    const body=document.querySelector("iframe")?.contentDocument?.body;
+    return body && getComputedStyle(body).backgroundColor === "rgb(255, 255, 255)";
+  });
+
   await page.getByRole("button", {name:"← Back to list",exact:true}).click();
   assert.equal(await list.locator("button.row").count(),2,"Back preserves the sender drill-down");
   await list.getByRole("button", {name:/Back to senders/}).click();
   await page.reload();
   await page.getByRole("button", {name:"Check Inbox"}).click();
   assert.equal(await page.evaluate(async () => (await import("/src/lib/stores/mail.svelte.ts")).mail.readingLayout),"full");
+  assert.deepEqual(await page.evaluate(async () => {
+    const {mail}=await import("/src/lib/stores/mail.svelte.ts");
+    return [mail.emailAppearanceFor("acc-1"),mail.emailAppearanceFor("acc-2")];
+  }),["original","theme"],"Appearance persists separately per account");
+  await list.locator("button.row").filter({hasText:"City Utilities"}).click();
+  await page.waitForFunction(() => {
+    const body=document.querySelector("iframe")?.contentDocument?.body;
+    return body && getComputedStyle(body).backgroundColor!=="rgb(255, 255, 255)";
+  });
+  await page.getByRole("button",{name:"← Back to list",exact:true}).click();
+
   await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });
   await page.screenshot({ path: new URL("../demo/output/task-inbox.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
   await page.evaluate(async () => {

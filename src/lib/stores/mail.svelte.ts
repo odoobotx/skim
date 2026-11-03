@@ -24,6 +24,7 @@ const state = $state({
   groupThreads: true,
   showDone: false,
   readingLayouts: {} as Record<string, "full" | "split">,
+  emailAppearances: {} as Record<string, "theme" | "original">,
   syncState: "idle" as SyncState,
   syncMessage: null as string | null,
   syncProgress: null as { done: number; total: number } | null,
@@ -539,6 +540,13 @@ export const mail = {
   },
   get readingLayout(): "full" | "split" { return state.readingLayouts[state.activeAccountId ?? UNIFIED] ?? "full"; },
   readingLayoutFor(accountId: string): "full" | "split" { return state.readingLayouts[accountId] ?? "full"; },
+  emailAppearanceFor(accountId: string): "theme" | "original" { return state.emailAppearances[accountId] ?? "theme"; },
+  async setEmailAppearance(accountId: string, appearance: "theme" | "original") {
+    const before = state.emailAppearances;
+    state.emailAppearances = {...before, [accountId]: appearance};
+    try { await api.setSetting("email_appearances", JSON.stringify(state.emailAppearances)); }
+    catch(error) { state.emailAppearances = before; throw error; }
+  },
   async setReadingLayout(accountId: string, layout: "full" | "split") {
     const before = state.readingLayouts;
     state.readingLayouts = {...before, [accountId]: layout};
@@ -664,6 +672,12 @@ export const mail = {
         state.readingLayouts = Object.fromEntries(Object.entries(layouts).filter(([,value]) => value === "full" || value === "split"));
       }
     } catch { state.readingLayouts = {}; }
+    try {
+      const appearances: unknown = JSON.parse(settings.email_appearances ?? "{}");
+      if (appearances && typeof appearances === "object" && !Array.isArray(appearances)) {
+        state.emailAppearances = Object.fromEntries(Object.entries(appearances).filter(([,value]) => value === "theme" || value === "original"));
+      }
+    } catch { state.emailAppearances = {}; }
     state.accounts = await api.listAccounts();
     // Restore the last scope; self-heal a stale id. With 2+ mailboxes the
     // unified view is the default — a concrete saved choice is respected,

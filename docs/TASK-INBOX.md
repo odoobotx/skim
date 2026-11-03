@@ -47,8 +47,10 @@ current preview has reached it.
 - Moonlit light/dark palettes add cool porcelain and deep blue-gray/violet
   surfaces. New profiles default to Moonlit dark. Compose follows the palette
   in every theme; Priority uses theme tokens rather than a fixed amber fill.
-- Email Appearance menu explains Original and Match app theme, with keyboard
-  navigation, Escape and outside-click dismissal.
+- Email Appearance is a saved per-account option in Settings. Match app theme
+  is the default; Original preserves the sender's colors. The message's own
+  account determines the preference in All inboxes, including off-page opens.
+  The reading surface has no per-message Appearance menu.
 - Hover/focus Done controls on individual rows and group summaries.
 - Drag across the Done column to stage a stable list, then submit one batch on release.
 - Show Done stays available even when Inbox is empty. It merges Inbox and
@@ -186,6 +188,8 @@ UIDPLUS move receipts would remove this limitation.
 Synthetic tests cover archive/restore body retention, new reply reopening,
 offline undo, database reopen, failed move rollback, Gmail duplicate copies,
 Sent exclusion, UIDVALIDITY reset, pending read flags, account scope and paging.
+Native settings allow the fork's sender rules, Show Done, reading layout and
+appearance keys; a frontend/native contract test guards that boundary.
 Browser tests cover Home, More, drill-downs, keyboard completion, group completion,
 Show Done in an empty inbox, Done marking read, restore, drag batching, failed
 archive recovery, saved sender rules and account reading layouts.

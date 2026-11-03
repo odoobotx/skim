@@ -648,6 +648,10 @@ mod tests {
                 let original = message(1, 10, Some("<done-read@example.com>"), 10);
                 let (id, thread) = add(conn, &original);
                 queries::recompute_folder_unread(conn, 1)?;
+                assert_eq!(
+                    bodies::get_thread(conn, thread)?.unwrap().messages[0].account_id,
+                    "a"
+                );
                 set_done(conn, &[id], true)?;
                 let rows = list_inbox(conn, None, true, true, 0, 100)?;
                 assert!(rows[0].is_done && rows[0].row.is_read);

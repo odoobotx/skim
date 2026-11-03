@@ -68,6 +68,7 @@ export interface Address {
 
 export interface MessageMeta {
   id: number;
+  accountId: string;
   folderId: number;
   threadId: number | null;
   subject: string;

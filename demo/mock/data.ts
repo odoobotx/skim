@@ -336,18 +336,20 @@ export function bodyFor(threadId: number): string {
 // A thread's messages. The reading pane shows the newest one in-folder, so a
 // single well-formed message per thread is enough for the demo.
 export function threadDetail(threadId: number) {
-  const inInbox = INBOX_THREADS.find((x) => x.id === threadId);
+  const secondary = ACC2_INBOX_THREADS.find((x) => x.id === threadId);
+  const inInbox = INBOX_THREADS.find((x) => x.id === threadId) ?? secondary;
   const t = inInbox ?? THREADS_BY_FOLDER[3].find((x) => x.id === threadId);
   if (!t) {
     return { id: threadId, subject: "(demo)", messages: [] };
   }
-  const folderId = inInbox ? 1 : 3;
+  const folderId = secondary ? 11 : inInbox ? 1 : 3;
   return {
     id: t.id,
     subject: t.subject,
     messages: [
       {
         id: t.id * 10 + 1,
+        accountId: secondary ? "acc-2" : "acc-1",
         folderId,
         threadId: t.id,
         subject: t.subject,

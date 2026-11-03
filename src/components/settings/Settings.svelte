@@ -640,6 +640,15 @@
               <div class="identity">
                 {@render readingLayout(account.id, "Reading layout")}
                 <label class="writer-field">
+                  <span class="microlabel">Email appearance</span>
+                  <select aria-label="Email appearance" value={mail.emailAppearanceFor(account.id)}
+                    onchange={(event) => void mail.setEmailAppearance(account.id, event.currentTarget.value as "theme" | "original").catch(error => { reportError("appearance.save",error); mail.noteError(t("ops.failed")); })}>
+                    <option value="theme">Match app theme · default</option>
+                    <option value="original">Original email · sender's colors</option>
+                  </select>
+                  <span class="dim hint">Applies to all mail from this account, including All inboxes.</span>
+                </label>
+                <label class="writer-field">
                   <span class="microlabel">{t("settings.sender_name")}</span>
                   <input
                     value={nameOf(account)}

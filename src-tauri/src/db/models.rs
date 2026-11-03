@@ -78,6 +78,7 @@ pub struct ThreadRow {
 #[serde(rename_all = "camelCase")]
 pub struct MessageMeta {
     pub id: i64,
+    pub account_id: String,
     pub folder_id: i64,
     pub thread_id: Option<i64>,
     pub subject: String,

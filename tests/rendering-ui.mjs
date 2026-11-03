@@ -71,6 +71,13 @@ try {
     });
   }
   await show(sanitized.html);
+  assert.notEqual(await frame.locator("body").evaluate(el => getComputedStyle(el).backgroundColor),"rgb(255, 255, 255)","App theme is the default");
+  assert.equal(await page.getByLabel("Email appearance",{exact:true}).count(),0,"Appearance is an account setting");
+  await page.evaluate(() => window.setRenderingAppearance("original"));
+  await page.waitForFunction(() => {
+    const body=document.querySelector("iframe")?.contentDocument?.body;
+    return body && getComputedStyle(body).backgroundColor === "rgb(255, 255, 255)";
+  });
   const logo = frame.getByAltText("Example logo");
   await logo.waitFor();
   await page.waitForFunction(() => [...document.querySelector("iframe").contentDocument.images].every(image => image.complete));
@@ -86,15 +93,13 @@ try {
   await page.getByRole("dialog", { name: "View image" }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "detached" });
-  await page.getByLabel("Email appearance",{exact:true}).click();
-  await page.getByRole("button",{name:/Match app theme/}).click();
+  await page.evaluate(() => window.setRenderingAppearance("theme"));
   await page.waitForFunction(() => {
     const body = document.querySelector("iframe")?.contentDocument?.body;
     return body && getComputedStyle(body).backgroundColor !== "rgb(255, 255, 255)";
   });
   assert.equal(await frame.getByText("Hello Example User,").evaluate(el => getComputedStyle(el).color), "rgb(236, 236, 239)");
-  await page.getByLabel("Email appearance",{exact:true}).click();
-  await page.getByRole("button",{name:/Original email/}).click();
+  await page.evaluate(() => window.setRenderingAppearance("original"));
 
   await page.setViewportSize({ width: 320, height: 700 });
   for (const [alt, attributes, maxWidth, maxHeight, ratio] of [
