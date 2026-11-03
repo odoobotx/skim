@@ -53,7 +53,7 @@ current preview has reached it.
   The reading surface has no per-message Appearance menu.
 - Hover/focus Done controls on individual rows and group summaries.
 - Drag across the Done column to stage a stable list, then submit one batch on release.
-- Show Done stays available even when Inbox is empty. It merges Inbox and
+- Show Done uses an accessible theme-aware slider, available even when Inbox is empty. It merges Inbox and
   received archived mail; clearing Done restores Inbox without marking unread.
   A new Inbox reply reopens an otherwise completed conversation.
 - Done marks the affected inbox messages read locally and queues the server read
@@ -61,7 +61,8 @@ current preview has reached it.
   It archives only a conversation's inbox messages using Skim's
   existing offline operation queue. Sent copies remain untouched by this action.
 - Existing unified Inbox and Sent remain available.
-- Keyboard navigation and select-all stay inside the current drill-down.
+- Keyboard navigation and select-all stay inside the current drill-down. J/K hints
+  live in the reading view/empty split pane, not over full-width inbox cards.
 - Group counts explicitly describe loaded conversations, not the entire mailbox.
   Loading older conversations expands the set. Rendering is bounded in batches
   of 100 groups/messages, including within a sender drill-down.
@@ -88,6 +89,44 @@ mail-server operations were performed against that account during development.
   Show Done changes the query, not the server state.
 - Group summaries and pagination belong in SQLite; opening the inbox must not
   require loading every cached message or fetching individual message bodies.
+
+## Future AI categorization — recorded, not implemented
+
+AI categorization should become an optional per-account feature when a working
+AI provider/key is configured. Keep the local first-pass classifier available
+without AI. Key presence makes the feature available; turning categorization on
+controls sending mailbox data to the chosen provider. The browser demo's canned
+AI responses are not classification and do not establish a working key.
+
+- Run in the background for new/recent unread mail first, with bounded batches,
+  concurrency, cost limits and retry/backoff. Never wait for AI when opening,
+  scrolling or rendering mail. Store results locally and reuse them; do not send
+  a request per view or repeatedly classify unchanged messages.
+- Combine message-level headers, list/automation markers, recipient and reply
+  context, and normalized subject/template signals. Use minimal permitted
+  content when headers are insufficient. The same address can send a receipt,
+  a newsletter and a personal reply; a sender alone is not the unit of learning.
+- Learn from explicit recategorization and accepted suggestions. Keep a local
+  feedback history with the requested scope: this message, this recurring stream,
+  or always this sender. An acceptance can suggest a reusable pattern; broad
+  learned rules should show examples before application. Done/archive activity
+  alone is not proof of the correct category.
+- Cache category, reason, confidence, feature/rule/model version and message
+  identity. Manual choices win. Provide undo, reset/forget learned patterns and
+  a way to see why a message was categorized. Account-specific corrections must
+  not silently leak into other accounts.
+- Leave uncertain mail visible under People. Start with reviewable suggestions;
+  enable automatic display grouping only at a measured confidence threshold.
+  Categorization must not itself archive, mark read, delete or send messages.
+- Treat email content as untrusted data, including instructions inside mail.
+  The classifier gets no tools or mailbox mutation powers and returns validated
+  category decisions for the supplied IDs only. Provider failures keep the last
+  cached/local result and never disrupt inbox use.
+- Evaluate mixed-purpose senders, human replies, mailing-list discussions,
+  newsletters, receipts, security alerts and invitations on a labeled local set.
+  Track corrections/reversals and missed important personal mail, not only the
+  number of messages confidently assigned. Improve incrementally from approved
+  examples rather than silently rewriting the whole inbox on every model change.
 
 ## Spark local cache observations — 2026-11-03
 

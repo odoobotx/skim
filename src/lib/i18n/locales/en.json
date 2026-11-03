@@ -1,5 +1,5 @@
 {
-  "app.name": "Skim Tasks",
+  "app.name": "Skim",
   "a11y.minimize": "Minimize",
   "a11y.maximize": "Maximize",
   "a11y.close": "Close",
@@ -94,6 +94,7 @@
   "select.one_mailbox": "Move works within one mailbox",
   "list.load_older": "Load older messages",
   "reading.no_selection": "Select a message to read",
+  "reading.navigation_hint": "Browse messages",
   "reading.hint_browse": "browse",
   "reading.hint_command": "search & any command",
   "reading.to_me": "to me",

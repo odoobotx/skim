@@ -146,7 +146,7 @@
       {/if}
       <div class="head-right">
         {#if mail.selectedFolder?.role === "inbox"}
-          <label class="show-done"><input type="checkbox" checked={mail.showDone}
+          <label class="show-done"><input type="checkbox" role="switch" checked={mail.showDone}
             onchange={(event) => void mail.setShowDone(event.currentTarget.checked).catch(error => { reportError("inbox.showDone",error); mail.noteError(t("ops.failed")); })} /> Show Done</label>
         {/if}
         {#if recapAvailable}
@@ -155,15 +155,7 @@
         {#if unread > 0}
           <span class="microlabel">{t("list.unread", { n: unread })}</span>
         {/if}
-        {#if mail.threads.length > 0}
-          <span class="nav-hint" title="{t('shortcuts.next')} · {t('shortcuts.prev')}">
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3">
-              <path d="M3.5 5L6 2.5 8.5 5" />
-              <path d="M3.5 7L6 9.5 8.5 7" />
-            </svg>
-            <kbd>J</kbd><kbd>K</kbd>
-          </span>
-        {/if}
+
       </div>
     {/if}
   </header>
@@ -212,8 +204,13 @@
 </section>
 
 <style>
-  .show-done { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); white-space:nowrap; }
-  .show-done input { accent-color:#749f9a; }
+  .show-done { display:flex; align-items:center; gap:8px; min-height:32px; font-size:12px; color:var(--text-dim); white-space:nowrap; cursor:pointer; }
+  .show-done input { appearance:none; position:relative; width:32px; height:19px; border:1px solid var(--hairline-strong); border-radius:999px; background:var(--selected); cursor:pointer; transition:background .14s ease,border-color .14s ease; }
+  .show-done input::before { content:""; display:block; position:absolute; left:3px; top:3px; width:11px; height:11px; border-radius:50%; background:var(--text-dim); transition:transform .14s ease,background .14s ease; }
+  .show-done input:checked { background:var(--accent); border-color:var(--accent); }
+  .show-done input:checked::before { transform:translateX(13px); background:var(--on-accent); }
+  .show-done input:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  @media(prefers-reduced-motion:reduce) { .show-done input,.show-done input::before { transition:none; } }
   .list.wide { width:auto; flex:1; }
   .list.wide :global(.row) { display:grid; grid-template-columns:minmax(150px,25%) minmax(120px,1fr) minmax(0,1.7fr) 60px; align-items:center; gap:16px; min-height:48px; padding:8px 78px 8px 42px; border-radius:9px; }
   .list.wide :global(.line1) { display:contents; }
@@ -283,18 +280,6 @@
     .edit {
       transition: none;
     }
-  }
-  .nav-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    color: var(--text-faint);
-    flex-shrink: 0;
-  }
-  .nav-hint kbd {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-faint);
   }
   /* Violet — an AI moment */
   .recap-chip {

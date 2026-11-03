@@ -519,10 +519,16 @@
       <div class="placeholder">
         <div class="ghost">✉</div>
         {mail.selectedThreadId === null ? t("reading.no_selection") : t("reading.loading")}
+        {#if mail.selectedThreadId === null && mail.navigationRows.length > 0}
+          <span class="browse-hint"><kbd>J</kbd><kbd>K</kbd><span>{t("reading.navigation_hint")}</span></span>
+        {/if}
       </div>
     {/if}
   {:else}
     <header class="toolbar">
+      {#if mail.navigationRows.length > 1 && mail.navigationRows.some(row => row.id === mail.selectedThreadId)}
+        <span class="browse-hint" title={`${t("shortcuts.next")} · ${t("shortcuts.prev")}`}><kbd>J</kbd><kbd>K</kbd><span>{t("reading.navigation_hint")}</span></span>
+      {/if}
       <div class="spacer"></div>
       <button class="tool" onclick={archive} title={t("reading.archive")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h12v3H2V3zm1 3v7h10V6M6.5 9h3" /></svg>
@@ -978,6 +984,9 @@
     }
   }
 
+  .browse-hint { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--text-faint); white-space:nowrap; }
+  .browse-hint kbd { padding:2px 4px; border:1px solid var(--hairline-strong); border-radius:4px; }
+  .browse-hint span { margin-left:4px; }
   .toolbar {
     display: flex;
     align-items: center;

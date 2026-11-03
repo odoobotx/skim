@@ -49,6 +49,7 @@ try {
   await page.getByRole("button", { name: "Check Inbox" }).click();
   const list = page.locator("section.list");
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
+  assert.equal(await page.getByText("Browse messages",{exact:true}).count(),0,"Full-width cards have no reading-navigation hint");
   await page.locator("nav.sidebar").getByRole("button", { name: "More", exact: true }).waitFor();
   assert.equal(await page.locator("nav.sidebar").getByRole("button", { name: /^Archive/ }).count(), 0);
   await page.locator("nav.sidebar").getByRole("button", { name: "More", exact: true }).click();
@@ -72,7 +73,7 @@ try {
   await notificationsDone.focus();
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("skimdemo.done") || "[]").includes(106));
-  await list.getByRole("checkbox", { name: "Show Done" }).check();
+  await list.getByRole("switch", { name: "Show Done" }).check();
   await list.getByRole("button", { name: /^Notifications/ }).click();
   await list.getByRole("button", { name: "Mark Undone", exact: true }).focus();
   await page.keyboard.press("Enter");
@@ -122,6 +123,7 @@ try {
   await page.locator(".overlay .close").click();
   assert(await page.locator(".list-host.split").isVisible());
   assert(await page.locator(".reading-host").isVisible());
+  await page.getByText("Browse messages",{exact:true}).waitFor();
   await page.locator("nav.sidebar").getByRole("button", {name:/Settings$/}).click();
   await page.getByLabel("All inboxes reading layout",{exact:true}).selectOption("full");
   await page.locator(".overlay .close").click();
@@ -129,6 +131,7 @@ try {
   await list.locator("button.row").first().click();
   await page.getByRole("button", {name:"← Back to list",exact:true}).waitFor();
   assert(!(await page.locator(".list-host").isVisible()), "Full-width email replaces the list");
+  await page.locator(".reading-host .toolbar").getByText("Browse messages",{exact:true}).waitFor();
   // Account appearance applies immediately to an open email in All inboxes.
   await page.waitForFunction(() => {
     const body=document.querySelector("iframe")?.contentDocument?.body;
@@ -201,7 +204,7 @@ try {
     await mail.setDoneRows([...mail.threads],true);
   });
   await page.waitForFunction(async () => (await import("/src/lib/stores/mail.svelte.ts")).mail.threads.length === 0);
-  await list.getByRole("checkbox",{name:"Show Done",exact:true}).check();
+  await list.getByRole("switch",{name:"Show Done",exact:true}).check();
   await page.waitForFunction(async () => {
     const {mail}=await import("/src/lib/stores/mail.svelte.ts");
     return mail.threads.length > 0 && mail.threads.every(row=>row.isDone && row.isRead) && mail.selectedFolder.unreadCount === 0;
