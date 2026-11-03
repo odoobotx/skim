@@ -18,10 +18,10 @@ pub fn task_ids(
     let mut stmt = conn.prepare("SELECT m.id FROM messages m JOIN folders f ON f.id=m.folder_id JOIN accounts a ON a.id=m.account_id
       WHERE m.thread_id IN (SELECT value FROM json_each(?1))
         AND (json_array_length(?2)=0 OR m.id IN (SELECT value FROM json_each(?2)))
-        AND ((?3 AND f.role='inbox') OR (NOT ?3 AND (f.role='archive' OR
+        AND ((?3 AND f.role='inbox') OR (f.role='archive' OR
           (f.role='all' AND COALESCE(m.from_addr,'') != a.email COLLATE NOCASE
             AND NOT EXISTS (SELECT 1 FROM messages s JOIN folders sf ON sf.id=s.folder_id
-              WHERE s.account_id=m.account_id AND s.message_id=m.message_id AND sf.role IN ('sent','trash','junk'))))))")?;
+              WHERE s.account_id=m.account_id AND s.message_id=m.message_id AND sf.role IN ('sent','trash','junk')))))")?;
     let rows = stmt
         .query_map(
             params![
@@ -211,6 +211,7 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
     let mut folders = std::collections::BTreeSet::new();
     let mut threads = std::collections::BTreeSet::new();
     let mut batches = std::collections::BTreeMap::<(String, i64, i64), Value>::new();
+    let mut flags = std::collections::BTreeMap::<(String, i64), Value>::new();
     for id in ids {
         let row: Option<(String,i64,i64,bool,String,String)> = tx.query_row(
             "SELECT m.account_id,m.folder_id,m.uid,m.local_move,f.imap_name,a.provider
@@ -219,6 +220,36 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
         let Some((account, origin, uid, pending, origin_name, provider)) = row else {
             continue;
         };
+        let (inbox, was_read, validity, thread): (bool,bool,Option<i64>,Option<i64>) = tx.query_row(
+            "SELECT f.role='inbox',m.is_read,f.uidvalidity,m.thread_id FROM messages m JOIN folders f ON f.id=m.folder_id WHERE m.id=?1",
+            [id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+        if let Some(thread) = thread {
+            threads.insert(thread);
+        }
+        folders.insert(origin);
+        if !accounts.contains(&account) {
+            accounts.push(account.clone());
+        }
+        if done {
+            tx.execute("UPDATE messages SET is_read=1 WHERE id=?1", [id])?;
+            tx.execute(
+                "UPDATE cached_moves SET read_override=1 WHERE message_id=?1",
+                [id],
+            )?;
+            if !pending && !was_read {
+                let payload=flags.entry((account.clone(),origin)).or_insert_with(||json!({
+                    "folderId":origin,"imapName":origin_name,"originValidity":validity,"uids":[],"flag":"seen","on":true
+                }));
+                payload["uids"]
+                    .as_array_mut()
+                    .expect("flag UIDs")
+                    .push(json!(uid));
+            }
+            // Older received archive messages also become read, but only Inbox moves.
+            if !inbox {
+                continue;
+            }
+        }
         let role = if done {
             if provider == "gmail" {
                 "all"
@@ -256,11 +287,6 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
                 params![id, target],
             )?;
         } else {
-            let validity: Option<i64> = tx.query_row(
-                "SELECT uidvalidity FROM folders WHERE id=?1",
-                [origin],
-                |r| r.get(0),
-            )?;
             tx.execute("INSERT INTO cached_moves(message_id,origin_folder,origin_uid,origin_validity,expected_folder,desired_folder,read_override) VALUES(?1,?2,?3,?4,?5,?5,(SELECT is_read FROM messages WHERE id=?1))",params![id,origin,uid,validity,target])?;
             let payload=batches.entry((account.clone(),origin,target)).or_insert_with(||json!({
                 "folderId":origin,"imapName":origin_name,"originValidity":validity,"uids":[],"cachedMessageIds":[],
@@ -276,37 +302,15 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
                 .push(json!(id));
         }
         tx.execute(
-            "UPDATE messages SET folder_id=?2,uid=-id,local_move=1,is_read=CASE WHEN ?3 THEN 1 ELSE is_read END WHERE id=?1",
-            params![id, target, done],
+            "UPDATE messages SET folder_id=?2,uid=-id,local_move=1 WHERE id=?1",
+            params![id, target],
         )?;
-        if done {
-            tx.execute(
-                "UPDATE cached_moves SET read_override=1 WHERE message_id=?1",
-                [id],
-            )?;
-        }
-        if let Some(thread) =
-            tx.query_row("SELECT thread_id FROM messages WHERE id=?1", [id], |r| {
-                r.get::<_, Option<i64>>(0)
-            })?
-        {
-            threads.insert(thread);
-        }
-        folders.insert(origin);
         folders.insert(target);
-        if !accounts.contains(&account) {
-            accounts.push(account);
-        }
+    }
+    for ((account, _), payload) in flags {
+        bodies::enqueue_op(&tx, &account, "set_flag", &payload)?;
     }
     for ((account, _, _), payload) in batches {
-        if done {
-            bodies::enqueue_op(
-                &tx,
-                &account,
-                "set_flag",
-                &json!({"folderId":payload["folderId"],"imapName":payload["imapName"],"originValidity":payload["originValidity"],"uids":payload["uids"],"flag":"seen","on":true}),
-            )?;
-        }
         bodies::enqueue_op(
             &tx,
             &account,
@@ -707,6 +711,49 @@ mod tests {
                 assert_eq!(add(conn, &restored).0, id);
                 let rows = list_inbox(conn, None, false, true, 0, 100)?;
                 assert!(!rows[0].is_done && rows[0].row.is_read);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn completing_a_conversation_reads_older_archive_but_only_moves_inbox() {
+        Db::open_in_memory()
+            .unwrap()
+            .with(|conn| {
+                seed(conn)?;
+                let original = message(2, 10, Some("<earlier@example.com>"), 10);
+                let (old, thread) = add(conn, &original);
+                let mut reply = message(1, 20, Some("<latest@example.com>"), 20);
+                reply.in_reply_to = original.message_id.clone();
+                let (new, reply_thread) = add(conn, &reply);
+                assert_eq!(reply_thread, thread);
+                let mut sent = message(3, 30, Some("<sent-reply@example.com>"), 15);
+                sent.in_reply_to = original.message_id;
+                sent.from_addr = Some("me@example.com".into());
+                let (sent_id, _) = add(conn, &sent);
+                // Flat mode stays on the selected message; conversation mode includes history.
+                assert_eq!(task_ids(conn, &[thread], &[new], true)?, vec![new]);
+                let ids = task_ids(conn, &[thread], &[], true)?;
+                assert_eq!(ids.len(), 2);
+                assert!(ids.contains(&old) && ids.contains(&new) && !ids.contains(&sent_id));
+                set_done(conn, &ids, true)?;
+                let rows = list_inbox(conn, None, true, true, 0, 100)?;
+                assert!(rows[0].is_done && rows[0].row.is_read);
+                assert_eq!(payload(conn)["cachedMessageIds"], json!([new]));
+                assert_eq!(
+                    conn.query_row::<(i64, bool), _, _>(
+                        "SELECT folder_id,local_move FROM messages WHERE id=?1",
+                        [old],
+                        |r| Ok((r.get(0)?, r.get(1)?))
+                    )?,
+                    (2, false)
+                );
+                assert!(!conn.query_row::<bool, _, _>(
+                    "SELECT is_read FROM messages WHERE id=?1",
+                    [sent_id],
+                    |r| r.get(0)
+                )?);
                 Ok(())
             })
             .unwrap();
