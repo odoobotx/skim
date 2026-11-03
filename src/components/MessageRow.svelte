@@ -26,6 +26,7 @@
   // Which mailbox this row came from — shown only in the unified view, where
   // rows from every account interleave.
   const badge = $derived(mail.unified ? mail.accountBadge(thread.accountId) : null);
+  const initials = $derived(thread.fromName.split(/\s+/).filter(Boolean).slice(0, 2).map(word => Array.from(word)[0]).join("").toUpperCase());
 
   function formatDate(unix: number): string {
     const locale = getLocale();
@@ -65,6 +66,7 @@
     <div class="line1">
       <span class="from">
         {#if !thread.isRead}<span class="unread-dot"></span>{/if}
+        <span class="sender-avatar" aria-hidden="true">{initials || "?"}</span>
         {#if badge}
           <span class="acct" style:background="var(--acct-{badge.color})">{badge.letter}</span>
         {/if}
@@ -82,6 +84,7 @@
 </div>
 
 <style>
+  .sender-avatar { width:26px; height:26px; border-radius:50%; flex-shrink:0; display:grid; place-items:center; font-size:9px; font-weight:600; color:var(--text-dim); background:color-mix(in srgb,#749f9a 15%,var(--bg)); border:1px solid color-mix(in srgb,#749f9a 25%,transparent); }
   .done-check { position:absolute; left:8px; top:50%; transform:translateY(-50%); z-index:2; width:26px; height:28px; border-radius:8px; opacity:0; color:var(--text-dim); touch-action:none; }
   .row-wrap:hover .done-check, .done-check:focus-visible, .completed .done-check { opacity:1; }
   .done-check:hover { background:color-mix(in srgb,#749f9a 20%,transparent); color:#749f9a; }
@@ -181,7 +184,7 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--text);
+    background: #4d9dd3;
     flex-shrink: 0;
   }
   .mcount {

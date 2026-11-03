@@ -15,13 +15,16 @@
   let category = $state<string | null>(null);
   let sender = $state<string | null>(null);
   let busy = $state<number[]>([]);
+  let sweep = $state<number[]>([]);
+  let snapshot = $state<ThreadRow[]>([]);
   const isInbox = $derived(mail.selectedFolder?.role === "inbox");
   const sections = ["notifications", "newsletters"] as const;
   let limit = $state(100);
-  const priorityRows = $derived(mail.threads.filter(row => inboxSection(row, rules) === "priority"));
-  const ordinaryGroups = $derived(groupInbox(mail.threads.filter(row => inboxSection(row, rules) === "mail"), mode));
-  const scoped = $derived(!isInbox || (category === null && sender === null) ? mail.threads
-    : mail.threads.filter(row => inboxSection(row, rules) === (category ?? "mail")));
+  const displayRows = $derived(sweep.length ? snapshot : mail.threads);
+  const priorityRows = $derived(displayRows.filter(row => inboxSection(row, rules) === "priority"));
+  const ordinaryGroups = $derived(groupInbox(displayRows.filter(row => inboxSection(row, rules) === "mail"), mode));
+  const scoped = $derived(!isInbox || (category === null && sender === null) ? displayRows
+    : displayRows.filter(row => inboxSection(row, rules) === (category ?? "mail")));
   const groups = $derived(groupInbox(scoped, mode));
   const opened = $derived(groups.find(group => group.key === sender));
   const openedRows = $derived(opened?.rows ?? []);
@@ -65,11 +68,9 @@
     }
   }
 
-  let sweep = $state<number[]>([]);
   let pointer: number | null = null;
   let previousY = 0;
   let sweepDone = true;
-  let snapshot: ThreadRow[] = [];
   let root: HTMLDivElement;
 
   async function complete(rows: ThreadRow[], done = !rows.every(row => row.isDone)) {
@@ -197,7 +198,7 @@
   {/each}
   {#if ordinaryGroups.length > limit}<button class="more" onclick={() => limit += 100}>{t("inbox.show_more")}</button>{/if}
   {#each sections as section}
-    {@const rows = mail.threads.filter(row => inboxSection(row, rules) === section)}
+    {@const rows = displayRows.filter(row => inboxSection(row, rules) === section)}
     {#if rows.length}
       {@render summary(t(`inbox.${section}`), rows, () => navigate(section))}
     {/if}

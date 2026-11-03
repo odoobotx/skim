@@ -95,8 +95,20 @@ pub fn list_inbox(
     offset: i64,
     limit: i64,
 ) -> rusqlite::Result<Vec<TaskRow>> {
-    let mut stmt = conn.prepare_cached(
-        "WITH raw_scope AS (
+    // Page thread IDs before windowing wide header rows, keeping large archives cheap.
+    let candidates = if grouped {
+        ", page_items AS (SELECT item FROM raw_scope GROUP BY item ORDER BY MAX(date) DESC,MAX(id) DESC LIMIT ?4 OFFSET ?5)"
+    } else {
+        ""
+    };
+    let page_filter = if grouped {
+        "WHERE item IN (SELECT item FROM page_items)"
+    } else {
+        ""
+    };
+    let pagination = if grouped { "" } else { "LIMIT ?4 OFFSET ?5" };
+    let sql = format!(
+        "WITH raw_scope AS NOT MATERIALIZED (
            SELECT m.*, f.role,
              CASE WHEN ?3 THEN m.thread_id ELSE m.id END AS item
            FROM messages m JOIN folders f ON f.id=m.folder_id JOIN accounts a ON a.id=m.account_id
@@ -106,10 +118,10 @@ pub fn list_inbox(
                 AND NOT EXISTS (SELECT 1 FROM messages s JOIN folders sf ON sf.id=s.folder_id
                   WHERE s.account_id=m.account_id AND s.message_id=m.message_id
                     AND sf.role IN ('sent','trash','junk'))))))
-         ), copies AS (
+         ) {candidates}, copies AS (
            SELECT *,ROW_NUMBER() OVER (PARTITION BY account_id,
              CASE WHEN message_id IS NOT NULL THEN 'mid:'||message_id ELSE 'id:'||id END
-             ORDER BY (role='inbox') DESC,local_move DESC,id DESC) AS copy_rank FROM raw_scope
+             ORDER BY (role='inbox') DESC,local_move DESC,id DESC) AS copy_rank FROM raw_scope {page_filter}
          ), scope AS (SELECT * FROM copies WHERE copy_rank=1), ranked AS (
            SELECT *, ROW_NUMBER() OVER (PARTITION BY item ORDER BY (role='inbox') DESC,date DESC,id DESC) AS rank,
              MAX(role='inbox') OVER (PARTITION BY item) AS outstanding,
@@ -123,8 +135,9 @@ pub fn list_inbox(
          ) SELECT thread_id,id,account_id,from_name,from_addr,subject,snippet,last_date,
              all_read,any_star,any_attachment,n,NOT outstanding,pending_all,list_id,
              list_unsubscribe,auto_submitted,precedence
-           FROM ranked WHERE rank=1 ORDER BY last_date DESC,id DESC LIMIT ?4 OFFSET ?5"
-    )?;
+           FROM ranked WHERE rank=1 ORDER BY last_date DESC,id DESC {pagination}"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
         .query_map(params![account, show_done, grouped, limit, offset], |r| {
             let address = r.get::<_, Option<String>>(4)?.unwrap_or_default();
@@ -225,7 +238,7 @@ pub fn set_done(conn: &mut Connection, ids: &[i64], done: bool) -> rusqlite::Res
             )?;
             tx.execute("INSERT INTO cached_moves(message_id,origin_folder,origin_uid,origin_validity,expected_folder,desired_folder) VALUES(?1,?2,?3,?4,?5,?5)",params![id,origin,uid,validity,target])?;
             let payload=batches.entry((account.clone(),origin,target)).or_insert_with(||json!({
-                "folderId":origin,"imapName":origin_name,"uids":[],"cachedMessageIds":[],
+                "folderId":origin,"imapName":origin_name,"originValidity":validity,"uids":[],"cachedMessageIds":[],
                 "destFolderId":target,"destImapName":target_name,"createDest":done && provider!="gmail"
             }));
             payload["uids"]
@@ -320,6 +333,7 @@ pub fn finish_cached(
 
 /// Bind a moved message back to its new server UID without replacing its body.
 pub fn adopt(conn: &Connection, msg: &NewMessage) -> rusqlite::Result<Option<(i64, i64)>> {
+    type CachedMatch = (i64, i64, i64, Option<bool>, Option<bool>);
     let Some(key) = msg
         .message_id
         .as_deref()
@@ -327,7 +341,7 @@ pub fn adopt(conn: &Connection, msg: &NewMessage) -> rusqlite::Result<Option<(i6
     else {
         return Ok(None);
     };
-    let row:Option<(i64,i64,i64,Option<bool>,Option<bool>)>=conn.query_row(
+    let row:Option<CachedMatch>=conn.query_row(
         "SELECT m.id,m.thread_id,c.desired_folder,c.read_override,c.star_override FROM messages m JOIN cached_moves c ON c.message_id=m.id
          WHERE m.account_id=?1 AND m.message_id=?2 AND c.expected_folder=?3 AND c.confirmed=1 AND m.local_move=1 ORDER BY m.id LIMIT 1",
         params![msg.account_id,key,msg.folder_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
@@ -412,11 +426,16 @@ pub fn adopt(conn: &Connection, msg: &NewMessage) -> rusqlite::Result<Option<(i6
             [desired],
             |r| r.get(0),
         )?;
+        let validity: Option<i64> = conn.query_row(
+            "SELECT uidvalidity FROM folders WHERE id=?1",
+            [msg.folder_id],
+            |r| r.get(0),
+        )?;
         bodies::enqueue_op(
             conn,
             &msg.account_id,
             if inbox { "restore" } else { "archive" },
-            &json!({"folderId":msg.folder_id,"imapName":name,"uids":[msg.uid],"destFolderId":desired,"destImapName":dest,"cachedMessageIds":[id]}),
+            &json!({"folderId":msg.folder_id,"imapName":name,"originValidity":validity,"uids":[msg.uid],"destFolderId":desired,"destImapName":dest,"cachedMessageIds":[id]}),
         )?;
     }
     threading::recompute_thread(conn, thread)?;

@@ -2088,15 +2088,13 @@ impl Engine {
                 })
                 .await;
             if let Ok(name) = name {
-                if self.sync_folder(folder_id, &name).await.is_ok() {
-                    if self.bind_cached_copies(folder_id, &name).await.is_ok() {
-                        let _ = self
-                            .db
-                            .call(move |conn| {
-                                crate::db::tasks::cleanup_unidentified(conn, folder_id)
-                            })
-                            .await;
-                    }
+                if self.sync_folder(folder_id, &name).await.is_ok()
+                    && self.bind_cached_copies(folder_id, &name).await.is_ok()
+                {
+                    let _ = self
+                        .db
+                        .call(move |conn| crate::db::tasks::cleanup_unidentified(conn, folder_id))
+                        .await;
                 }
             }
         }
@@ -2189,6 +2187,24 @@ impl Engine {
             return Ok(Vec::new());
         }
         self.ensure_selected(&imap_name).await?;
+
+        if let Some(expected) = payload["originValidity"].as_i64() {
+            let mailbox = self
+                .session()
+                .await?
+                .select(&imap_name)
+                .await
+                .map_err(imap_err)?;
+            if mailbox.uid_validity.map(i64::from) != Some(expected) {
+                if let Some(folder) = folder_id {
+                    self.sync_folder(folder, &imap_name).await?;
+                }
+                return Err(SkimError::other(
+                    "ops",
+                    "Mailbox identifiers changed; retaining cached mail for reconciliation",
+                ));
+            }
+        }
 
         let mut affected: Vec<i64> = folder_id.into_iter().collect();
 

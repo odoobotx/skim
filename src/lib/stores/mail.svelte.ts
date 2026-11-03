@@ -3,6 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, reportError } from "../api";
 import { t } from "../i18n/index.svelte";
+import { ui } from "./ui.svelte";
 import type { Account, Folder, SyncState, ThreadRow } from "../types";
 
 const PAGE = 100;
@@ -266,6 +267,7 @@ async function switchAccount(id: string) {
  *  account first when the target belongs to another mailbox (toast clicks,
  *  cold-start pending opens, AI citations, search hits). */
 async function openLocation(folderId: number, threadId: number | null, messageId: number) {
+  ui.showInbox();
   if (isUnified()) {
     // The unified view has no real folders — map the target onto its virtual
     // counterpart (same role, or same label name).
@@ -324,8 +326,12 @@ function fetchPage(folderId: number, offset: number, limit = PAGE): Promise<Thre
 /** Deepest a refresh will re-read. A list scrolled thousands of rows down does
  *  not need all of them re-fetched every time a message arrives. */
 const MAX_REFRESH = 500;
+let readSerial = 0;
+const viewKey = () => `${state.activeAccountId}:${state.selectedFolderId}:${state.groupThreads}:${state.showDone}`;
 
 async function refreshThreads() {
+  const serial = ++readSerial;
+  const key = viewKey();
   const folderId = state.selectedFolderId;
   if (folderId === null) {
     missedRefresh = true;
@@ -340,19 +346,23 @@ async function refreshThreads() {
   );
   const rows = await guard(() => fetchPage(folderId, 0, depth));
   if (rows === null) return;
-  if (state.selectedFolderId !== folderId) return;
+  if (serial !== readSerial || key !== viewKey()) return;
+  state.threadsLoading = false;
   shown(rows);
   pruneSelection();
 }
 
 async function selectFolder(id: number) {
   state.selectedFolderId = id;
+  const serial = ++readSerial;
+  const key = viewKey();
   state.selectedThreadId = null;
   state.selectedMessageId = null;
   clearSelection();
   state.threadsLoading = true;
   try {
     const rows = await guard(() => fetchPage(id, 0));
+    if (serial !== readSerial || key !== viewKey()) return;
     // A failed read must not leave the previous folder's mail under the new
     // folder's name — the list says "couldn't load" instead.
     if (rows === null) {
@@ -362,7 +372,7 @@ async function selectFolder(id: number) {
       shown(rows);
     }
   } finally {
-    state.threadsLoading = false;
+    if (serial === readSerial) state.threadsLoading = false;
   }
 }
 
@@ -373,13 +383,14 @@ async function loadMoreThreads() {
   // the same offset and append the same page twice (duplicate {#each} keys).
   if (state.selectedFolderId === null || loadingMore) return;
   const folderId = state.selectedFolderId;
-  const grouped = state.groupThreads;
+  const key = viewKey();
+  const serial = readSerial;
   loadingMore = true;
   try {
     const more = await fetchPage(folderId, state.fetched);
     // The user may have switched folders (or grouping) mid-fetch — these rows
     // belong to the previous view, don't append them to the new one.
-    if (state.selectedFolderId !== folderId || state.groupThreads !== grouped) return;
+    if (key !== viewKey() || serial !== readSerial) return;
     state.fetched += more.length;
     // A concurrent refresh can shift the offset; drop rows we already show.
     const seen = new Set(state.threads.map(rowKey));
@@ -514,6 +525,7 @@ export const mail = {
   },
   set selectedThreadId(id: number | null) {
     state.selectedThreadId = id;
+    if (id !== null) ui.showInbox();
   },
   get selectedMessageId() {
     return state.selectedMessageId;
@@ -529,7 +541,12 @@ export const mail = {
     if (state.showDone === on) return;
     state.showDone = on;
     clearSelection();
-    await api.setSetting("inbox_show_done", on ? "on" : "off");
+    try { await api.setSetting("inbox_show_done", on ? "on" : "off"); }
+    catch (error) {
+      state.showDone = !on;
+      await refreshThreads();
+      throw error;
+    }
     await refreshThreads();
     if (on) void api.syncNow(activeAccount()?.id).catch(() => {});
   },
@@ -540,6 +557,10 @@ export const mail = {
     const keys = new Set(rows.map(rowKey));
     state.threads = state.threads.flatMap(row => keys.has(rowKey(row))
       ? done && !state.showDone ? [] : [{ ...row, isDone: done, pendingMove: true }] : [row]);
+    if (done && !state.showDone && rows.some(row => row.id === state.selectedThreadId)) {
+      state.selectedThreadId = null;
+      state.selectedMessageId = null;
+    }
     try {
       await api.setTasksDone(rows, done);
     } catch (error) {
