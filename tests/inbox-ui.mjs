@@ -34,6 +34,9 @@ try {
     }) }));
   });
   await page.goto("http://localhost:1421");
+  await page.getByRole("button", { name: "Check Inbox" }).waitFor();
+  await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });
+  await page.screenshot({ path: new URL("../demo/output/home.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
   await page.getByRole("button", { name: "Check Inbox" }).click();
   const list = page.locator("section.list");
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
@@ -103,6 +106,11 @@ try {
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
   await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });
   await page.screenshot({ path: new URL("../demo/output/task-inbox.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
+  await page.evaluate(async () => {
+    const { ui } = await import("/src/lib/stores/ui.svelte.ts");
+    ui.setTheme("cold", "dark");
+  });
+  await page.screenshot({ path: new URL("../demo/output/task-inbox-dark.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
   assert.deepEqual(errors, []);
   console.log("Inbox UI passed: Home, minimal sidebar, sender drill-down, category completion, Show Done, restore, sweep batching, failure recovery, persisted priority, unified Sent.");
 } finally {

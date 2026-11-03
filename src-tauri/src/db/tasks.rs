@@ -97,7 +97,7 @@ pub fn list_inbox(
 ) -> rusqlite::Result<Vec<TaskRow>> {
     // Page thread IDs before windowing wide header rows, keeping large archives cheap.
     let candidates = if grouped {
-        ", page_items AS (SELECT item FROM raw_scope GROUP BY item ORDER BY MAX(date) DESC,MAX(id) DESC LIMIT ?4 OFFSET ?5)"
+        ", page_items AS (SELECT item FROM raw_scope GROUP BY item ORDER BY MAX(date) DESC,item DESC LIMIT ?4 OFFSET ?5)"
     } else {
         ""
     };
@@ -135,7 +135,7 @@ pub fn list_inbox(
          ) SELECT thread_id,id,account_id,from_name,from_addr,subject,snippet,last_date,
              all_read,any_star,any_attachment,n,NOT outstanding,pending_all,list_id,
              list_unsubscribe,auto_submitted,precedence
-           FROM ranked WHERE rank=1 ORDER BY last_date DESC,id DESC {pagination}"
+           FROM ranked WHERE rank=1 ORDER BY last_date DESC,item DESC {pagination}"
     );
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
@@ -690,6 +690,85 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn queued_archive_survives_database_reopen() {
+        let path = std::env::temp_dir().join(format!("skim-task-test-{}.db", uuid::Uuid::new_v4()));
+        let db = Db::open(&path).unwrap();
+        let id = db
+            .with(|conn| {
+                seed(conn)?;
+                let (id, _) = add(conn, &message(1, 10, Some("<restart@example.com>"), 10));
+                bodies::set_body(conn, id, None, Some("Saved offline"), "Saved offline", &[])?;
+                set_done(conn, &[id], true)?;
+                Ok(id)
+            })
+            .unwrap();
+        drop(db);
+        let db = Db::open(&path).unwrap();
+        db.with(|conn| {
+            let rows = list_inbox(conn, None, true, true, 0, 100)?;
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].is_done && rows[0].pending_move);
+            assert_eq!(
+                bodies::get_body(conn, id)?.unwrap().1.as_deref(),
+                Some("Saved offline")
+            );
+            assert_eq!(payload(conn)["uids"], json!([10]));
+            Ok(())
+        })
+        .unwrap();
+        drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn validity_reset_does_not_reuse_old_uid_and_pending_flags_follow_the_body() {
+        Db::open_in_memory()
+            .unwrap()
+            .with(|conn| {
+                seed(conn)?;
+                let original = message(1, 10, Some("<reset@example.com>"), 10);
+                let (id, _) = add(conn, &original);
+                set_done(conn, &[id], true)?;
+                conn.execute("UPDATE folders SET uidvalidity=2 WHERE id=1", [])?;
+                finish_cached(conn, &payload(conn), false)?;
+                assert!(list_inbox(conn, None, true, true, 0, 100)?[0].pending_move);
+                assert!(bodies::resolve_uids(conn, &[id])?.is_empty());
+                bodies::set_flag_local(conn, &[id], "seen", true)?;
+                let mut arrived = original;
+                arrived.uid = 800;
+                assert_eq!(add(conn, &arrived).0, id);
+                assert!(list_inbox(conn, None, false, true, 0, 100)?[0].row.is_read);
+                assert_eq!(payload(conn)["uids"], json!([800]));
+                assert_eq!(payload(conn)["flag"], "seen");
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn paging_and_account_scope_keep_the_same_order_for_tied_dates() {
+        Db::open_in_memory().unwrap().with(|conn| {
+            seed(conn)?;
+            conn.execute("INSERT INTO accounts(id,email,provider,imap_host,smtp_host,created_at) VALUES('b','other@example.com','custom','x','x',0)",[])?;
+            conn.execute("INSERT INTO folders(id,account_id,imap_name,display_name,role) VALUES(5,'b','INBOX','Inbox','inbox')",[])?;
+            for uid in 1..=12 {
+                let mut msg=message(1,uid,Some(&format!("<page{uid}@example.com>")),10);
+                msg.subject=Some(format!("Separate {uid}"));
+                add(conn,&msg);
+            }
+            let mut other=message(5,1,Some("<other@example.com>"),20);other.account_id="b".into();
+            add(conn,&other);
+            let all=list_inbox(conn,Some("a"),true,true,0,100)?;
+            let mut pages=Vec::new();
+            for offset in [0,5,10] {pages.extend(list_inbox(conn,Some("a"),true,true,offset,5)?.into_iter().map(|r|r.row.id));}
+            assert_eq!(pages,all.iter().map(|r|r.row.id).collect::<Vec<_>>());
+            assert_eq!(all.len(),12);
+            assert_eq!(list_inbox(conn,None,true,true,0,100)?.len(),13);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]

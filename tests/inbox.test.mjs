@@ -48,3 +48,10 @@ test("sender rule parsing rejects malformed settings and unsafe keys", () => {
     { "cliff@example.com": { priority: true, category: "newsletters" } });
   assert.deepEqual(parseSenderRules('{"c@example.com":{"priority":"yes","category":"invalid"}}'), {});
 });
+
+test("automatic categories remain active until explicitly corrected by the sender rule", () => {
+  const notification = row(1, "Updates", "updates@example.com", { category: "notifications" });
+  assert.equal(inboxSection(notification, {}), "notifications");
+  assert.equal(inboxSection(notification, parseSenderRules('{"updates@example.com":{"priority":false}}')), "notifications");
+  assert.equal(inboxSection(notification, {"updates@example.com": {category: "mail"}}), "mail");
+});
