@@ -20,8 +20,8 @@
   let limit = $state(100);
   const priorityRows = $derived(mail.threads.filter(row => inboxSection(row, rules) === "priority"));
   const ordinaryGroups = $derived(groupInbox(mail.threads.filter(row => inboxSection(row, rules) === "mail"), mode));
-  const scoped = $derived(category === null || !isInbox ? mail.threads
-    : mail.threads.filter(row => inboxSection(row, rules) === category));
+  const scoped = $derived(!isInbox || (category === null && sender === null) ? mail.threads
+    : mail.threads.filter(row => inboxSection(row, rules) === (category ?? "mail")));
   const groups = $derived(groupInbox(scoped, mode));
   const opened = $derived(groups.find(group => group.key === sender));
   const openedRows = $derived(opened?.rows ?? []);
@@ -141,7 +141,7 @@
     {#if group.rows.length === 1}
       {@render message(group.rows[0])}
     {:else}
-      {@render summary(group.label, group.rows, () => navigate("mail", group.key))}
+      {@render summary(group.label, group.rows, () => navigate(null, group.key))}
     {/if}
   {/each}
   {#if ordinaryGroups.length > limit}<button class="more" onclick={() => limit += 100}>{t("inbox.show_more")}</button>{/if}

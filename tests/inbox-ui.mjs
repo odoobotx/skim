@@ -40,8 +40,14 @@ try {
   assert.equal(await list.locator("button.row").filter({ hasText: "Anna Weber" }).count(), 0);
   await list.getByRole("button", { name: /^Anna Weber/ }).click();
   assert.equal(await list.locator("button.row").filter({ hasText: "Anna Weber" }).count(), 2);
+  await list.getByRole("button", { name: "Select message", exact: true }).first().click();
+  await list.getByRole("button", { name: "Select message", exact: true }).last().click({ modifiers: ["Shift"] });
+  await list.getByText("2 selected", { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(async () => {
+    const { mail } = await import("/src/lib/stores/mail.svelte.ts");
+    return mail.selectedRows.map(row => row.id);
+  }), [101, 109], "Shift selection must not include collapsed senders between these conversations");
   await list.getByRole("button", { name: /Back to senders/ }).click();
-  await list.getByRole("button", { name: /Back to inbox/ }).click();
   await list.getByRole("button", { name: /^Notifications/ }).click();
   await list.locator("button.row").filter({ hasText: "GitHub" }).waitFor();
   await list.getByRole("button", { name: "✓ Done", exact: true }).click();
