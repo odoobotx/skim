@@ -116,6 +116,18 @@ account identifiers were exported. No settings or mail were changed.
   automatic classification plus sender rules; enum meanings and Spark's
   classifier accuracy were not inferred from numeric values.
 
+A later read-only sample of the 20,000 newest locally inserted non-Sent,
+non-Draft messages with a sender address found 12,590 populated
+`categoryByHeaders` values; 1,639 differed from the message's final `category`.
+Among 715 repeated (account, normalized sender address) pairs, 44 had multiple
+header-category codes and 74 had multiple final-category codes. The query took
+about one second. These observations support studying layered, message-level
+classification, but do not establish enum meanings, current classifier inputs,
+or why labels differ. Historical corrections, contact settings, classifier
+changes and message/conversation context could contribute. No message text or
+sender identities were exported. This is observational evidence, not a recovered
+Spark algorithm.
+
 Spark was minimized during the cache inspection. A subsequent visible UI
 inspection confirmed a narrow left Done column revealed with row hover, right
 hover actions, a tinted Priority panel capped with Show all, compact category
