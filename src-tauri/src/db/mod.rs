@@ -295,7 +295,8 @@ mod tests {
     #[test]
     fn mojibake_folders_are_marked_for_a_resync() {
         let mut conn = Connection::open_in_memory().unwrap();
-        let (before, redecode) = MIGRATIONS.split_at(MIGRATIONS.len() - 1);
+        // Exercise migration 0016 even when newer migrations follow it.
+        let (before, following) = MIGRATIONS.split_at(15);
         migrate(&mut conn, before).unwrap();
         conn.execute_batch(
             "INSERT INTO accounts (id, email, provider, imap_host, smtp_host, created_at)
@@ -310,7 +311,7 @@ mod tests {
         )
         .unwrap();
         let mut all = before.to_vec();
-        all.extend_from_slice(redecode);
+        all.extend_from_slice(following);
         migrate(&mut conn, &all).unwrap();
 
         let state = |id: i64| -> (Option<i64>, Option<i64>) {

@@ -339,6 +339,7 @@ pub fn run() {
             commands::mail::folder_account_id,
             commands::mail::list_threads,
             commands::mail::list_task_inbox,
+            commands::mail::list_recent_unread,
             commands::mail::set_thread_done,
             commands::mail::set_tasks_done,
             commands::mail::list_messages,

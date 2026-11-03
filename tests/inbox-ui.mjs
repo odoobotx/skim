@@ -35,6 +35,15 @@ try {
   });
   await page.goto("http://localhost:1421");
   await page.getByRole("button", { name: "Check Inbox" }).waitFor();
+  assert.equal(await page.locator("nav.sidebar").count(), 0, "Home must be separate from inbox navigation");
+  await page.getByRole("button", {name:"Search mail",exact:true}).waitFor();
+  await page.getByRole("button", {name:"Compose",exact:true}).click();
+  await page.waitForFunction(async () => {
+    const { commandLog } = await import("/demo/mock/tauri-core.ts");
+    return commandLog.some(call => call.cmd === "open_compose_window");
+  });
+  await page.locator(".mail-preview").first().waitFor();
+  assert((await page.locator(".mail-preview").count()) <= 5);
   await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });
   await page.screenshot({ path: new URL("../demo/output/home.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
   await page.getByRole("button", { name: "Check Inbox" }).click();

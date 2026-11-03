@@ -198,12 +198,13 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       const list = db.THREADS_BY_FOLDER[args.folderId] ?? [];
       return ok(args.offset > 0 ? [] : list);
     }
+    case "list_recent_unread":
     case "list_task_inbox": {
       const rows = MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row => ({...row, accountId: db.ACCOUNT.id}));
-      return ok(rows.filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)))
+      return ok(rows.filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)) && (cmd !== "list_recent_unread" || !row.isRead))
         .map(row => ({...row, isDone: doneRows.has(row.id), pendingMove: false,
           category: row.fromAddr.includes("github") ? "notifications" : row.fromAddr.includes("stripe") ? "newsletters" : "mail"}))
-        .slice(args.offset, args.offset + args.limit));
+        .slice(args.offset ?? 0, cmd === "list_recent_unread" ? 5 : args.offset + args.limit));
     }
     case "set_tasks_done":
     case "set_thread_done": {

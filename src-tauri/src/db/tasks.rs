@@ -95,6 +95,26 @@ pub fn list_inbox(
     offset: i64,
     limit: i64,
 ) -> rusqlite::Result<Vec<TaskRow>> {
+    inbox_rows(conn, account, show_done, grouped, offset, limit, false)
+}
+
+pub fn recent_unread(
+    conn: &Connection,
+    account: Option<&str>,
+    limit: i64,
+) -> rusqlite::Result<Vec<TaskRow>> {
+    inbox_rows(conn, account, false, true, 0, limit, true)
+}
+
+fn inbox_rows(
+    conn: &Connection,
+    account: Option<&str>,
+    show_done: bool,
+    grouped: bool,
+    offset: i64,
+    limit: i64,
+    unread_only: bool,
+) -> rusqlite::Result<Vec<TaskRow>> {
     // Page thread IDs before windowing wide header rows, keeping large archives cheap.
     let candidates = if grouped {
         ", page_items AS (SELECT item FROM raw_scope GROUP BY item ORDER BY MAX(date) DESC,item DESC LIMIT ?4 OFFSET ?5)"
@@ -113,6 +133,7 @@ pub fn list_inbox(
              CASE WHEN ?3 THEN m.thread_id ELSE m.id END AS item
            FROM messages m JOIN folders f ON f.id=m.folder_id JOIN accounts a ON a.id=m.account_id
            WHERE (?1 IS NULL OR m.account_id=?1)
+             AND (NOT ?6 OR m.is_read=0)
              AND (f.role='inbox' OR (?2 AND (f.role='archive' OR
                (f.role='all' AND COALESCE(m.from_addr,'') != a.email COLLATE NOCASE
                 AND NOT EXISTS (SELECT 1 FROM messages s JOIN folders sf ON sf.id=s.folder_id
@@ -139,42 +160,45 @@ pub fn list_inbox(
     );
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
-        .query_map(params![account, show_done, grouped, limit, offset], |r| {
-            let address = r.get::<_, Option<String>>(4)?.unwrap_or_default();
-            let list: Option<String> = r.get(14)?;
-            let unsubscribe: Option<String> = r.get(15)?;
-            let auto = r.get::<_, Option<String>>(16)?.unwrap_or_default();
-            let precedence = r.get::<_, Option<String>>(17)?.unwrap_or_default();
-            Ok(TaskRow {
-                category: category(
-                    &address,
-                    list.is_some(),
-                    unsubscribe.is_some(),
-                    &auto,
-                    &precedence,
-                )
-                .into(),
-                is_done: r.get(12)?,
-                pending_move: r.get(13)?,
-                row: ThreadRow {
-                    id: r.get(0)?,
-                    message_id: if grouped { None } else { Some(r.get(1)?) },
-                    account_id: r.get(2)?,
-                    from_name: r
-                        .get::<_, Option<String>>(3)?
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| address.clone()),
-                    from_addr: address,
-                    subject: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                    snippet: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                    date: r.get(7)?,
-                    is_read: r.get(8)?,
-                    is_starred: r.get(9)?,
-                    has_attachments: r.get(10)?,
-                    message_count: r.get(11)?,
-                },
-            })
-        })?
+        .query_map(
+            params![account, show_done, grouped, limit, offset, unread_only],
+            |r| {
+                let address = r.get::<_, Option<String>>(4)?.unwrap_or_default();
+                let list: Option<String> = r.get(14)?;
+                let unsubscribe: Option<String> = r.get(15)?;
+                let auto = r.get::<_, Option<String>>(16)?.unwrap_or_default();
+                let precedence = r.get::<_, Option<String>>(17)?.unwrap_or_default();
+                Ok(TaskRow {
+                    category: category(
+                        &address,
+                        list.is_some(),
+                        unsubscribe.is_some(),
+                        &auto,
+                        &precedence,
+                    )
+                    .into(),
+                    is_done: r.get(12)?,
+                    pending_move: r.get(13)?,
+                    row: ThreadRow {
+                        id: r.get(0)?,
+                        message_id: if grouped { None } else { Some(r.get(1)?) },
+                        account_id: r.get(2)?,
+                        from_name: r
+                            .get::<_, Option<String>>(3)?
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| address.clone()),
+                        from_addr: address,
+                        subject: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                        snippet: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                        date: r.get(7)?,
+                        is_read: r.get(8)?,
+                        is_starred: r.get(9)?,
+                        has_attachments: r.get(10)?,
+                        message_count: r.get(11)?,
+                    },
+                })
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -787,6 +811,47 @@ mod tests {
                 assert_ne!(id, new_id);
                 cleanup_unidentified(conn, 2)?;
                 assert_eq!(list_inbox(conn, None, true, false, 0, 100)?.len(), 1);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn home_unread_is_not_limited_to_the_first_inbox_page() {
+        Db::open_in_memory()
+            .unwrap()
+            .with(|conn| {
+                seed(conn)?;
+                for uid in 1..=130 {
+                    let mut msg = message(
+                        1,
+                        uid,
+                        Some(&format!("<read{uid}@example.com>")),
+                        100 + i64::from(uid),
+                    );
+                    msg.subject = Some(format!("Read {uid}"));
+                    msg.is_read = true;
+                    add(conn, &msg);
+                }
+                let (old, _) = add(conn, &message(1, 500, Some("<old-unread@example.com>"), 1));
+                add(
+                    conn,
+                    &message(2, 501, Some("<archive-unread@example.com>"), 1000),
+                );
+                assert!(list_inbox(conn, None, false, true, 0, 100)?
+                    .iter()
+                    .all(|r| r.row.is_read));
+                let rows = recent_unread(conn, None, 5)?;
+                assert_eq!(rows.len(), 1);
+                assert_eq!(
+                    rows[0].row.id,
+                    conn.query_row::<i64, _, _>(
+                        "SELECT thread_id FROM messages WHERE id=?1",
+                        [old],
+                        |r| r.get(0)
+                    )?
+                );
+                assert!(!rows[0].row.is_read);
                 Ok(())
             })
             .unwrap();

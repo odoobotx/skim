@@ -475,10 +475,10 @@
   {#if ready}
     {#if !needsOnboarding}
       <main class="panes">
-        <Sidebar />
         {#if ui.homeOpen}
           <Home />
         {:else}
+        <Sidebar />
         <MessageList />
         {#if mail.selectedFolder?.role === "drafts" && draftEditorId !== null}
           {#key draftEditorId}

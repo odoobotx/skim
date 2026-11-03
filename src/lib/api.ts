@@ -62,6 +62,7 @@ export const api = {
     invoke<ThreadRow[]>("list_task_inbox", { accountId, showDone, grouped, offset, limit }),
   setThreadDone: (threadId: number, messageId: number | null, done: boolean) =>
     invoke<void>("set_thread_done", { threadId, messageId, done }),
+  listRecentUnread: (accountId: string | null) => invoke<ThreadRow[]>("list_recent_unread", {accountId}),
   setTasksDone: (rows: ThreadRow[], done: boolean) => invoke<void>("set_tasks_done", {
     threadIds: [...new Set(rows.map(row => row.id))],
     messageIds: rows.flatMap(row => row.messageId == null ? [] : [row.messageId]), done,

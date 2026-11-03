@@ -5,12 +5,19 @@ The upstream MIT license and attribution remain in place. New behavior belongs
 to this fork; upstream's deliberate exclusion of organizing features does not
 describe this fork's scope.
 
-## First implementation
+## Current preview
 
 - Sender grouping across unrelated subjects, with a separate exact-address mode.
 - Sender drill-downs within category drill-downs.
 - Priority sender rules, independent of message stars/pins, with a top section.
-- Explicit Notifications and Newsletters sender rules, saved in local settings.
+- Automatic Notifications/Newsletters classification from headers and sender signals,
+  with explicit sender corrections saved in local settings.
+- Full-window nature Home screen with Search, Compose, Check Inbox and recent unread mail.
+- Full-width inbox, compact rows and an Inbox/Sent/Drafts sidebar.
+- Hover/focus Done controls on individual rows and group summaries.
+- Drag across the Done column to stage a stable list, then submit one batch on release.
+- Show Done merges Inbox and received archived mail; clearing Done restores Inbox.
+  A new Inbox reply reopens an otherwise completed conversation.
 - Done actions that archive only a conversation's inbox messages using Skim's
   existing offline operation queue. Sent copies remain untouched by this action.
 - Existing unified Inbox and Sent remain available.
@@ -21,8 +28,9 @@ describe this fork's scope.
 
 This is a development prototype, not a replacement for daily email yet. The
 Windows preview is installed separately as Skim Tasks; the user is setting up
-their own mailbox. Automated tests use synthetic mail and do not validate a live
-account.
+their own mailbox. Automated mutations use synthetic mail. A read-only snapshot
+of the fork profile was used to validate migration and inbox query behavior; no
+mail-server operations were performed against that account during development.
 
 ## Confirmed design direction
 
@@ -85,30 +93,58 @@ Behavior reference: https://sparkmailapp.com/help/manage-your-inbox/mark-as-done
 
 ## Remaining requirements, in priority order
 
-1. **Show Done toggle:** show inbox and completed/archived mail in the same
-   grouped view. Preserve useful completed content locally while archive ops
-   are queued. Upstream archive deletes source cache rows immediately, so simply
-   merging Inbox and Archive lists would have a visibility gap. Test offline
-   completion, restart, move failure, server resync and a new reply reopening work.
-2. **Mailbox-wide grouping:** move group summaries and paging into SQLite so
-   counts, sorting and sender drill-downs cover all cached mail without loading
-   every conversation into the frontend. Retain lazy rendering.
-3. **Automatic Notifications/Newsletters:** classify using reliable message
-   headers and provider signals, with explicit sender corrections taking
-   precedence. Current categories are manual; no claim of Spark-level automatic
-   classification. Preserve human mail and measure accuracy on labeled fixtures.
-4. **Recipient/To grouping:** expose recipient metadata through list queries and
-   support grouping by recipient address. Define multi-recipient membership and
-   name-versus-address behavior before implementing. Do not fetch each full
-   conversation just to populate recipient groups.
-5. **Pins:** expose a compact pinned group independently from Priority senders.
-   Skim's existing stars remain unchanged in this first pass.
-6. **Layout polish:** compact Spark-inspired rows, better group summaries,
-   remembered drill-down scroll positions, persistent grouping mode and a
-   lightweight reading/organizing experience without per-message control clutter.
-7. **Native validation:** build the Windows executable, set up this fork's own
-   provider OAuth registrations, then test multiple accounts, large mailboxes,
-   sleep/resume, offline queues and performance. No live mailbox testing has run.
+1. **Mailbox-wide sender grouping:** move group summaries and paging into SQLite so
+   counts and sender drill-downs cover all cached mail without loading every
+   conversation into the frontend. Current group actions cover the loaded rows,
+   as indicated in the list; they must not imply completion of unloaded history.
+2. **Classification accuracy:** header/sender rules are now automatic, but need a
+   labeled evaluation set and user feedback. No claim of Spark-level accuracy.
+3. **Recipient/To grouping:** expose recipient metadata through list queries and
+   define multi-recipient membership before implementing.
+4. **Pins:** expose a compact pinned group independently from Priority senders.
+5. **Navigation polish:** remembered drill-down scroll positions and persistent
+   grouping mode. Keep secondary controls out of idle rows.
+6. **Platform validation:** Windows previews build through CI. Linux requires
+   replacing Windows-specific integrations and adding Linux build/testing.
+   OAuth registrations and real-account sleep/resume/offline verification remain.
+
+## Archive implementation and verification
+
+Completion keeps the message row, downloaded body, attachments and search index
+under stable local IDs while an offline operation is pending. A move journal
+retains original server coordinates; confirmed destination headers rebind the
+cached row using Message-ID. Offline undo records the desired folder and queues
+an inverse operation only after its destination UID is known. Gmail restore adds
+Inbox without deleting the All Mail copy. Source UIDVALIDITY is checked before
+server mutations. Read/star overrides follow pending moves.
+
+Known limit: mail without Message-ID cannot be rebound safely. Its cached body
+survives while offline/pending, but after successful destination sync the server
+copy takes over. Pending undo for such a message waits until reconciliation.
+UIDPLUS move receipts would remove this limitation.
+
+Synthetic tests cover archive/restore body retention, new reply reopening,
+offline undo, database reopen, failed move rollback, Gmail duplicate copies,
+Sent exclusion, UIDVALIDITY reset, pending read flags, account scope and paging.
+Browser tests cover Home, More, drill-downs, keyboard completion, group completion,
+Show Done/restore, drag batching, failed archive recovery and saved sender rules.
+
+Performance check on 2026-11-03 (Python SQLite, in-memory copy; query time only):
+100,000 synthetic headers, first 100 grouped rows, about 38 ms Inbox / 89 ms with
+Show Done, versus about 252 ms / 1182 ms before paging IDs first. A private
+pre-upgrade snapshot with 27,128 actual headers migrated successfully; first-page
+queries took about 27 ms / 37 ms. These are local observations, not production
+latency guarantees. No private messages or screenshots are committed.
+
+## Local UI development
+
+`npm run demo:dev` runs the same Svelte UI in a browser with synthetic fixtures.
+It reloads UI changes immediately and does not access mailbox credentials.
+`npm run tauri -- dev` runs the web UI against the native Rust backend and needs
+the native toolchain; Rust changes compile incrementally. Installed previews
+bundle the UI and backend together. A real browser-only email client would need
+a separate service for IMAP/SMTP, authentication and storage; the current browser
+preview is a design/test surface, not a second live mailbox client.
 
 ## Development isolation
 

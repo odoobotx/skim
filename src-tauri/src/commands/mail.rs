@@ -170,6 +170,19 @@ pub async fn set_thread_done(
 }
 
 #[tauri::command]
+pub async fn list_recent_unread(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+) -> Result<Vec<tasks::TaskRow>> {
+    state
+        .db
+        .read("recent_unread", move |conn| {
+            tasks::recent_unread(conn, account_id.as_deref(), 5)
+        })
+        .await
+}
+
+#[tauri::command]
 pub async fn set_tasks_done(
     app: AppHandle,
     state: State<'_, AppState>,

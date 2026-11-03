@@ -1,19 +1,62 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { api, reportError } from "../lib/api";
   import { mail } from "../lib/stores/mail.svelte";
   import { ui } from "../lib/stores/ui.svelte";
   import { palette } from "../lib/stores/palette.svelte";
+  import type { ThreadRow } from "../lib/types";
   let now = $state(new Date());
+  let composeError = $state(false);
+  let composing = $state(false);
+  let recentFailed = $state(false);
+  let recent = $state<ThreadRow[]>([]);
   onMount(() => {
     const timer = setInterval(() => now = new Date(), 60000);
     return () => clearInterval(timer);
   });
   const greeting = $derived(now.getHours() < 12 ? "Good morning." : now.getHours() < 18 ? "Good afternoon." : "Good evening.");
-  const unread = $derived(mail.folders.find(f => f.role === "inbox")?.unreadCount ?? 0);
+  const inbox = $derived(mail.folders.find(folder => folder.role === "inbox"));
+  const unread = $derived(inbox?.unreadCount ?? 0);
+  $effect(() => {
+    void mail.threads;
+    if (!mail.accounts.length) return;
+    const account = mail.unified ? null : mail.account?.id ?? null;
+    let active = true;
+    void api.listRecentUnread(account).then(rows => { if (active) { recent = rows; recentFailed = false; } })
+      .catch(error => { if (active) recentFailed = true; reportError("home.unread", error); });
+    return () => { active = false; };
+  });
+  $effect(() => {
+    if (inbox && inbox.id !== mail.selectedFolderId) void mail.selectFolder(inbox.id);
+  });
   async function enter() {
+    mail.selectedThreadId = null;
+    mail.selectedMessageId = null;
     ui.showInbox();
-    const inbox = mail.folders.find(f => f.role === "inbox");
     if (inbox && inbox.id !== mail.selectedFolderId) await mail.selectFolder(inbox.id);
+  }
+  async function open(row: ThreadRow) {
+    await enter();
+    mail.selectedThreadId = row.id;
+    mail.selectedMessageId = row.messageId ?? null;
+  }
+  async function compose() {
+    if (composing) return;
+    composing = true;
+    composeError = false;
+    try {
+      const draft = await api.createDraft(await mail.composeAccountId());
+      await api.openComposeWindow(draft.id);
+    } catch (error) {
+      reportError("home.compose", error);
+      composeError = true;
+    } finally { composing = false; }
+  }
+  function time(date: number) {
+    const d = new Date(date * 1000);
+    return d.toDateString() === now.toDateString()
+      ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 </script>
 
@@ -21,38 +64,56 @@
   <div class="topline">
     <div><time>{now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</time>
       <div class="clock">{now.toLocaleTimeString(undefined, {hour: "numeric", minute: "2-digit"})}</div></div>
-    <button class="search" onclick={() => palette.show()} aria-label="Search mail">Search mail <kbd>Ctrl K</kbd></button>
+    <div class="tools">
+      <button onclick={() => palette.show()} aria-label="Search mail">
+        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.8"/><path d="m13 13 4.5 4.5"/></svg><span>Search</span>
+      </button>
+      <button onclick={() => void compose()} disabled={composing} aria-label="Compose">
+        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m13 3 4 4-9 9-5 1 1-5zM11 5l4 4"/></svg><span>Compose</span>
+      </button>
+    </div>
   </div>
   <div class="welcome">
-    <div class="mark" aria-hidden="true">✓</div>
-    <p class="eyebrow">A LITTLE SPACE TO THINK</p>
     <h1>{greeting}</h1>
-    <p class="sub">Your mail, at your pace.</p>
     <button class="enter" onclick={() => void enter()}>Check Inbox <span aria-hidden="true">↗</span></button>
-    <p class="status">{#if mail.loadFailed}Mail couldn't load. Open Inbox to retry.
+    <p class="status">{#if mail.loadFailed || recentFailed}Mail couldn't load. Open Inbox to retry.
       {:else if mail.syncState === "syncing"}Catching up on your mail…
-      {:else if unread > 0}{unread.toLocaleString()} unread · {mail.accounts.length} {mail.accounts.length === 1 ? "mailbox" : "mailboxes"}
-      {:else}A quiet inbox. Enjoy the space.{/if}</p>
+      {:else if unread > 0}{unread.toLocaleString()} unread
+      {:else}No unread mail. Enjoy the quiet.{/if}</p>
+    {#if composeError}<p class="error" role="alert">Couldn't open the composer. Please try again.</p>{/if}
+    {#if recent.length}
+      <div class="latest"><h2>Latest unread</h2><ul>
+        {#each recent as row (row.messageId ?? row.id)}
+          <li><button class="mail-preview" onclick={() => void open(row)}>
+            <span class="sender">{row.fromName || row.fromAddr}</span>
+            <span class="subject">{row.subject || "No subject"}</span><time>{time(row.date)}</time>
+          </button></li>
+        {/each}
+      </ul></div>
+    {/if}
   </div>
-  <div class="foot">SKIM TASKS <span>Less noise. More clarity.</span></div>
 </section>
 
 <style>
-  .home { position:relative; isolation:isolate; flex:1; overflow:hidden; display:flex; flex-direction:column; padding:36px 48px; background:var(--bg); }
-  .home::before { content:""; position:absolute; z-index:-1; width:900px; height:900px; right:-260px; top:-330px; border-radius:50%; background:radial-gradient(ellipse, color-mix(in srgb, #749f9a 18%, transparent),transparent 67%); pointer-events:none; }
-  .home::after { content:""; position:absolute; z-index:-1; width:800px; height:800px; left:-250px; bottom:-460px; border-radius:50%; background:radial-gradient(ellipse, color-mix(in srgb, #c3a778 14%, transparent),transparent 68%); pointer-events:none; }
+  .home { position:relative; isolation:isolate; flex:1; overflow:auto; display:flex; flex-direction:column; padding:32px 44px; color:#fff; background:#17342f; background-image:linear-gradient(180deg,#061b1940,#06151170),url("/home-nature.png"); background-size:cover; background-position:center; }
   .topline { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
-  time { font-size:12px; color:var(--text-dim); } .clock { margin-top:8px; font-size:28px; font-weight:350; letter-spacing:-1px; }
-  .search { display:flex; gap:24px; align-items:center; padding:10px 14px; border:1px solid var(--hairline); border-radius:24px; color:var(--text-dim); font-size:12px; }
-  kbd { font-size:10px; color:var(--text-faint); }
-  .welcome { margin:auto; padding:48px 16px 90px; text-align:center; }
-  .mark { display:grid; place-items:center; margin:0 auto 34px; width:48px; height:48px; border:1px solid color-mix(in srgb, #749f9a 45%, transparent); border-radius:16px; font-size:23px; color:#749f9a; transform:rotate(-6deg); }
-  .eyebrow { font-size:10px; letter-spacing:2.5px; color:var(--text-faint); }
-  h1 { margin:18px 0 12px; font-size:clamp(32px,5vw,64px); font-weight:450; letter-spacing:-2px; line-height:1.1; }
-  .sub { color:var(--text-dim); font-size:16px; }
-  .enter { display:inline-flex; gap:30px; align-items:center; margin-top:30px; padding:14px 24px; border-radius:30px; background:var(--text); color:var(--bg); font-weight:600; font-size:13px; transition:transform .15s; }
-  .enter:hover { transform:translateY(-2px); } .status { margin-top:18px; font-size:11px; color:var(--text-faint); }
-  .foot { display:flex; justify-content:space-between; gap:20px; font-size:9px; letter-spacing:2px; color:var(--text-faint); } .foot span { letter-spacing:0; font-size:11px; }
-  @media(max-width:700px) { .home { padding:24px; } .search kbd { display:none; } }
-  @media(prefers-reduced-motion:reduce) { .enter { transition:none; } }
+  .topline time { font-size:12px; color:#ffffffe0; } .clock { margin-top:8px; font-size:30px; font-weight:350; letter-spacing:-1px; }
+  .tools { display:flex; gap:10px; }
+  .tools button { display:flex; gap:9px; align-items:center; padding:11px 14px; border:1px solid #ffffff55; border-radius:26px; color:#fff; font-size:12px; background:#071b1920; }
+  .tools button:hover { background:#ffffff20; } .tools button:disabled { opacity:.5; }
+  .welcome { width:min(760px,100%); margin:auto; padding:64px 0 88px; text-align:center; }
+  h1 { margin:0 0 28px; font-size:clamp(36px,5vw,62px); font-weight:550; letter-spacing:-1.8px; line-height:1.12; text-shadow:0 2px 24px #0003; }
+  .enter { display:inline-flex; gap:24px; align-items:center; padding:13px 24px; border-radius:30px; background:#f7faf7; color:#153b33; font-weight:600; font-size:13px; box-shadow:0 4px 22px #0001; }
+  .enter:hover { background:#fff; } .status { margin:16px 0 0; font-size:12px; color:#ffffffe0; }
+  .latest { margin:32px auto 0; text-align:left; width:100%; }
+  h2 { font-size:11px; font-weight:500; color:#ffffffe0; margin:0 12px 10px; }
+  ul { padding:0; margin:0; list-style:none; display:grid; gap:4px; }
+  .mail-preview { display:grid; grid-template-columns:minmax(100px,25%) minmax(0,1fr) 68px; gap:16px; align-items:center; width:100%; padding:12px 16px; border-radius:9px; background:#0b242ab8; border:1px solid #ffffff18; color:#fff; text-align:left; font-size:12px; }
+  .mail-preview:hover { background:#193e42e8; border-color:#ffffff55; }
+  .sender,.subject { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sender { font-weight:600; } .subject { color:#ffffffe8; } .mail-preview time { font-size:10px; color:#ffffffca; text-align:right; }
+  .home :focus-visible { outline:2px solid #fff; outline-offset:3px; }
+  .error { margin:12px; font-size:12px; }
+  @media(max-width:650px) { .home { padding:24px; } .tools button span { display:none; } .tools button { padding:12px; } .mail-preview { grid-template-columns:minmax(80px,30%) minmax(0,1fr); gap:12px; } .mail-preview time { display:none; } }
+  @media(max-height:700px) { .welcome { padding:30px 0; } h1 { font-size:40px; margin-bottom:20px; } .latest { margin-top:22px; } }
 </style>
