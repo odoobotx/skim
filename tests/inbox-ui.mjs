@@ -20,7 +20,7 @@ try {
     if (attempt === 59) throw Error(`Vite did not start: ${output}`);
   }
   browser = await chromium.launch({ headless: true, executablePath: process.env.SKIM_TEST_BROWSER || undefined });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: "America/Chicago" });
   await page.clock.setFixedTime(new Date("2026-11-18T18:00:00-06:00"));
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -384,7 +384,7 @@ try {
   });
 
   // The same Back/Done control owns the currently open group, never its parent.
-  const groupPage=await browser.newPage({viewport:{width:1155,height:956}});
+  const groupPage=await browser.newPage({viewport:{width:1155,height:956},timezoneId:"America/Chicago"});
   groupPage.on("pageerror",error=>errors.push(error.message));
   await groupPage.clock.setFixedTime(new Date("2026-11-18T18:00:00-06:00"));
   await groupPage.addInitScript(()=>{
