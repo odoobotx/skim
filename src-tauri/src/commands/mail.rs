@@ -189,12 +189,23 @@ pub async fn set_thread_done(
 pub async fn list_recent_unread(
     state: State<'_, AppState>,
     account_id: Option<String>,
-) -> Result<Vec<tasks::TaskRow>> {
+) -> Result<tasks::HomeUnread> {
     state
         .db
         .read("recent_unread", move |conn| {
-            tasks::recent_unread(conn, account_id.as_deref(), 5)
+            tasks::home_unread(conn, account_id.as_deref())
         })
+        .await
+}
+
+#[tauri::command]
+pub async fn acknowledge_inbox(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+) -> Result<()> {
+    state
+        .db
+        .call(move |conn| tasks::acknowledge_inbox(conn, account_id.as_deref()))
         .await
 }
 

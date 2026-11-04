@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, reportError } from "../lib/api";
-  import { parseSenderRules, type SenderRule, type SenderRules } from "../lib/inbox";
+  import { parseSenderRules, type SenderRule } from "../lib/inbox";
   import { folderLabel } from "../lib/folders";
   import { t } from "../lib/i18n/index.svelte";
   import { ai } from "../lib/stores/ai.svelte";
@@ -12,7 +12,7 @@
   import SelectionBar from "./SelectionBar.svelte";
   import OrganizedList from "./OrganizedList.svelte";
 
-  let rules = $state<SenderRules>({});
+  const rules = $derived(mail.senderRules);
   let rulesReady = $state(false);
   const organized = $derived(["inbox", "sent"].includes(mail.selectedFolder?.role ?? ""));
   let saveQueue = Promise.resolve();
@@ -20,7 +20,7 @@
   onMount(() => {
     let active = true;
     void api.getSettings().then(settings => {
-      if (active) rules = parseSenderRules(settings.inbox_sender_rules);
+      if (active) mail.senderRules = parseSenderRules(settings.inbox_sender_rules);
     }).catch(error => {
       reportError("inbox.rules.load", error);
       mail.noteError(t("inbox.rules_failed"));
@@ -32,7 +32,7 @@
     mail.clearSelection();
     mail.selectedThreadId = null;
     mail.selectedMessageId = null;
-    rules = { ...rules, [address]: { ...rules[address], ...patch } };
+    mail.senderRules = { ...rules, [address]: { ...rules[address], ...patch } };
     const value = JSON.stringify(rules);
     // Serialize writes so a slow earlier save cannot overwrite a later edit.
     saveQueue = saveQueue.then(() => api.setSetting("inbox_sender_rules", value)).catch(error => {

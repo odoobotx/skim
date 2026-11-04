@@ -154,6 +154,69 @@ pub fn recent_unread(
     inbox_rows(conn, account, false, true, 0, limit, true)
 }
 
+#[derive(Serialize)]
+pub struct HomeUnread {
+    pub rows: Vec<TaskRow>,
+    pub total: i64,
+}
+
+fn home_checkpoint(conn: &Connection) -> rusqlite::Result<Value> {
+    Ok(queries::get_setting(conn, "home_inbox_seen")?
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({})))
+}
+
+fn home_filter(checkpoint: &str) -> String {
+    format!(
+        "m.is_read=0 AND (
+      json_extract({checkpoint}, '$.\"'||f.id||'\".account') IS NOT m.account_id
+      OR json_extract({checkpoint}, '$.\"'||f.id||'\".validity') IS NOT f.uidvalidity
+      OR m.uid > COALESCE(json_extract({checkpoint}, '$.\"'||f.id||'\".uid'), -1))"
+    )
+}
+
+/// Inbox entry acknowledges arrivals, independently of the mail's read flag.
+/// IMAP UIDs distinguish new arrivals from old mail fetched during backfill.
+pub fn acknowledge_inbox(conn: &Connection, account: Option<&str>) -> rusqlite::Result<()> {
+    let mut seen = home_checkpoint(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT f.id,f.account_id,f.uidvalidity,COALESCE(MAX(m.uid),0)
+      FROM folders f LEFT JOIN messages m ON m.folder_id=f.id AND m.local_move=0
+      WHERE f.role='inbox' AND (?1 IS NULL OR f.account_id=?1) GROUP BY f.id",
+    )?;
+    let rows = stmt.query_map([account], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+            r.get::<_, i64>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (folder, account, validity, mut uid) = row?;
+        let key = folder.to_string();
+        let previous = &seen[&key];
+        if previous["account"] == account && previous["validity"] == json!(validity) {
+            uid = uid.max(previous["uid"].as_i64().unwrap_or(0));
+        }
+        seen[key] = json!({"account":account,"validity":validity,"uid":uid});
+    }
+    queries::set_setting(conn, "home_inbox_seen", &seen.to_string())
+}
+
+pub fn home_unread(conn: &Connection, account: Option<&str>) -> rusqlite::Result<HomeUnread> {
+    let checkpoint = home_checkpoint(conn)?.to_string();
+    let sql = format!("SELECT COUNT(DISTINCT m.account_id||':'||COALESCE('mid:'||NULLIF(m.message_id,''),'pk:'||m.id))
+      FROM messages m JOIN folders f ON f.id=m.folder_id
+      WHERE f.role='inbox' AND (?1 IS NULL OR m.account_id=?1) AND {}", home_filter("?2"));
+    let total = conn.query_row(&sql, params![account, checkpoint], |r| r.get(0))?;
+    Ok(HomeUnread {
+        rows: recent_unread(conn, account, 5)?,
+        total,
+    })
+}
+
 fn inbox_rows(
     conn: &Connection,
     account: Option<&str>,
@@ -185,13 +248,19 @@ fn inbox_rows(
         ""
     };
     let pagination = if grouped { "" } else { "LIMIT ?4 OFFSET ?5" };
+    let home_filter = home_filter("?7");
+    let checkpoint = if unread_only {
+        home_checkpoint(conn)?.to_string()
+    } else {
+        "{}".into()
+    };
     let sql = format!(
         "WITH raw_scope AS NOT MATERIALIZED (
            SELECT m.*, f.role,
              CASE WHEN ?3 THEN m.thread_id ELSE m.id END AS item
            FROM messages m JOIN folders f ON f.id=m.folder_id JOIN accounts a ON a.id=m.account_id
            WHERE (?1 IS NULL OR m.account_id=?1)
-             AND (NOT ?6 OR m.is_read=0)
+             AND (NOT ?6 OR ({home_filter}))
              AND (f.role='inbox' OR (?2 AND (f.role='archive' OR
                (f.role='all' AND COALESCE(m.from_addr,'') != a.email COLLATE NOCASE
                 AND NOT EXISTS (SELECT 1 FROM messages s JOIN folders sf ON sf.id=s.folder_id
@@ -221,7 +290,15 @@ fn inbox_rows(
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
         .query_map(
-            params![account, show_done, grouped, limit, offset, unread_only],
+            params![
+                account,
+                show_done,
+                grouped,
+                limit,
+                offset,
+                unread_only,
+                checkpoint
+            ],
             |r| {
                 let address = r.get::<_, Option<String>>(4)?.unwrap_or_default();
                 let name = r.get::<_, Option<String>>(3)?.unwrap_or_default();
@@ -1184,6 +1261,83 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn home_visit_acknowledges_arrivals_without_marking_them_read() {
+        Db::open_in_memory()
+            .unwrap()
+            .with(|conn| {
+                seed(conn)?;
+                let original = message(1, 20, Some("<seen@example.com>"), 100);
+                let (_, thread) = add(conn, &original);
+                assert_eq!(home_unread(conn, None)?.total, 1);
+                acknowledge_inbox(conn, Some("a"))?;
+                assert_eq!(home_unread(conn, None)?.total, 0);
+                assert!(recent_unread(conn, None, 5)?.is_empty());
+                assert!(!list_inbox(conn, None, false, true, 0, 100)?[0].row.is_read);
+                // A recently fetched old header is not a new delivery. A new UID
+                // with an old Date header is, including replies to existing threads.
+                add(conn, &message(1, 5, Some("<backfill@example.com>"), 500));
+                let mut reply = message(1, 21, Some("<new-reply@example.com>"), 1);
+                reply.in_reply_to = original.message_id;
+                assert_eq!(add(conn, &reply).1, thread);
+                let summary = home_unread(conn, None)?;
+                assert_eq!(summary.total, 1);
+                assert_eq!(summary.rows.len(), 1);
+                assert_eq!(summary.rows[0].row.id, thread);
+                // Two deliveries of the same RFC message count only once.
+                reply.uid = 22;
+                add(conn, &reply);
+                assert_eq!(home_unread(conn, None)?.total, 1);
+                acknowledge_inbox(conn, None)?;
+                assert_eq!(home_unread(conn, None)?.total, 0);
+                assert_eq!(
+                    conn.query_row::<i64, _, _>(
+                        "SELECT COUNT(*) FROM messages WHERE is_read=0",
+                        [],
+                        |r| r.get(0)
+                    )?,
+                    4
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn home_checkpoints_keep_accounts_and_uid_epochs_separate() {
+        Db::open_in_memory().unwrap().with(|conn| {
+            seed(conn)?;
+            conn.execute("INSERT INTO accounts(id,email,provider,imap_host,smtp_host,created_at) VALUES('b','other@example.com','custom','x','x',0)", [])?;
+            conn.execute("INSERT INTO folders(id,account_id,imap_name,display_name,role,uidvalidity) VALUES(5,'b','INBOX','Inbox','inbox',1)", [])?;
+            add(conn, &message(1, 20, Some("<a@example.com>"), 100));
+            let mut other = message(5, 20, Some("<b@example.com>"), 100);
+            other.account_id = "b".into();
+            add(conn, &other);
+            acknowledge_inbox(conn, Some("a"))?;
+            assert_eq!(home_unread(conn, Some("a"))?.total, 0);
+            assert_eq!(home_unread(conn, Some("b"))?.total, 1);
+            assert_eq!(home_unread(conn, None)?.total, 1);
+            acknowledge_inbox(conn, None)?;
+            assert_eq!(home_unread(conn, None)?.total, 0);
+            // Archiving/deleting the highest UID must not move the mark back
+            // and turn subsequently fetched older mail into a new arrival.
+            conn.execute("DELETE FROM messages WHERE folder_id=1", [])?;
+            acknowledge_inbox(conn, Some("a"))?;
+            add(conn, &message(1, 10, Some("<a-backfill@example.com>"), 500));
+            assert_eq!(home_unread(conn, Some("a"))?.total, 0);
+            // A server UID reset must not hide new arrivals behind an old mark.
+            conn.execute("UPDATE folders SET uidvalidity=2 WHERE id=5", [])?;
+            conn.execute("UPDATE messages SET uid=1 WHERE folder_id=5", [])?;
+            assert_eq!(home_unread(conn, None)?.total, 1);
+            acknowledge_inbox(conn, Some("b"))?;
+            assert_eq!(home_unread(conn, None)?.total, 0);
+            // Bad legacy settings recover by showing unread mail.
+            queries::set_setting(conn, "home_inbox_seen", "not json")?;
+            assert_eq!(home_unread(conn, None)?.total, 2);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]

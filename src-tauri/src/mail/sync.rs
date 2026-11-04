@@ -9,7 +9,7 @@
 use crate::db::models::{Account, NewMessage};
 use crate::db::{accounts as db_accounts, bodies, queries, Db};
 use crate::error::{Result, SkimError};
-use crate::mail::{imap_client, oauth, parse, smtp};
+use crate::mail::{imap_client, oauth, parse, sent_copy, smtp};
 use crate::secrets;
 use futures::StreamExt;
 use serde_json::json;
@@ -2366,7 +2366,7 @@ impl Engine {
         Ok(Vec::new())
     }
 
-    /// Send a queued draft over SMTP, mirror it to Sent (non-Gmail), and
+    /// Send a queued draft over SMTP, file the Sent copy, and
     /// delete the draft.
     async fn execute_send(&mut self, payload: &serde_json::Value) -> Result<Option<i64>> {
         let Some(draft_id) = payload["draftId"].as_i64() else {
@@ -2650,12 +2650,23 @@ impl Engine {
     }
 
     /// Mirror an outgoing message to the Sent folder and return that
-    /// folder's id (so the caller resyncs it). Gmail files sent mail on its
-    /// own — appending would duplicate it, so there we only resync.
+    /// folder's id (so the caller resyncs it). Providers that file their own
+    /// Sent copy only need a resync, never an extra APPEND.
     async fn mirror_to_sent(&mut self, raw: &[u8]) -> Option<i64> {
-        // Gmail files sent mail automatically; appending would duplicate it.
+        let modes = self
+            .db
+            .call(|conn| queries::get_setting(conn, "sent_copy_modes"))
+            .await
+            .ok()
+            .flatten();
+        let client_saves = sent_copy::client_saves(
+            &self.account.provider,
+            &self.account.smtp_host,
+            &self.account.id,
+            modes.as_deref(),
+        );
         let mut sent_folder_id = None;
-        if self.account.provider != "gmail" {
+        if client_saves {
             match self.role_folder("sent", "Sent").await {
                 Ok(dest) => {
                     match self.session().await {
@@ -2687,7 +2698,7 @@ impl Engine {
                 Err(e) => tracing::warn!(error = %e, "no Sent folder"),
             }
         } else {
-            // Give Gmail a moment to file the copy, then resync the Sent
+            // Give the server a moment to file the copy, then resync the Sent
             // folder so the message shows up right away — otherwise it only
             // appears on the next polling cycle.
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;

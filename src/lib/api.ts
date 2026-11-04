@@ -64,7 +64,8 @@ export const api = {
     invoke<void>("set_thread_done", { threadId, messageId, done }),
   setTaskPriority: (row: ThreadRow, priority: boolean | null) =>
     invoke<void>("set_task_priority", {threadId: row.id, messageId: row.messageId ?? null, priority}),
-  listRecentUnread: (accountId: string | null) => invoke<ThreadRow[]>("list_recent_unread", {accountId}),
+  listRecentUnread: (accountId: string | null) => invoke<{rows:ThreadRow[];total:number}>("list_recent_unread", {accountId}),
+  acknowledgeInbox: (accountId: string | null) => invoke<void>("acknowledge_inbox", {accountId}),
   setTasksDone: (rows: ThreadRow[], done: boolean) => invoke<void>("set_tasks_done", {
     threadIds: [...new Set(rows.map(row => row.id))],
     messageIds: rows.flatMap(row => row.messageId == null ? [] : [row.messageId]), done,

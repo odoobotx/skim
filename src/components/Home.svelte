@@ -10,20 +10,21 @@
   let composing = $state(false);
   let recentFailed = $state(false);
   let recent = $state<ThreadRow[]>([]);
+  let newUnread = $state(0);
+  let recentLoaded = $state(false);
   onMount(() => {
     const timer = setInterval(() => now = new Date(), 60000);
     return () => clearInterval(timer);
   });
   const greeting = $derived(now.getHours() < 12 ? "Good morning." : now.getHours() < 18 ? "Good afternoon." : "Good evening.");
   const inbox = $derived(mail.folders.find(folder => folder.role === "inbox"));
-  const unread = $derived(inbox?.unreadCount ?? 0);
   $effect(() => {
     void mail.threads;
     if (!mail.accounts.length) return;
     const account = mail.unified ? null : mail.account?.id ?? null;
     let active = true;
-    void api.listRecentUnread(account).then(rows => { if (active) { recent = rows; recentFailed = false; } })
-      .catch(error => { if (active) recentFailed = true; reportError("home.unread", error); });
+    void mail.newUnread(account).then(summary => { if (active) { recent = summary.rows; newUnread = summary.total; recentFailed = false; recentLoaded = true; } })
+      .catch(error => { if (active) { recentFailed = true; recentLoaded = true; } reportError("home.unread", error); });
     return () => { active = false; };
   });
   $effect(() => {
@@ -77,12 +78,12 @@
     <h1>{greeting}</h1>
     <button class="enter" onclick={() => void enter()}>Check Inbox</button>
     <p class="status">{#if mail.loadFailed || recentFailed}Mail couldn't load. Open Inbox to retry.
-      {:else if mail.syncState === "syncing"}Catching up on your mail…
-      {:else if unread > 0}{unread.toLocaleString()} unread
-      {:else}No unread mail. Enjoy the quiet.{/if}</p>
+      {:else if !recentLoaded}Checking for new mail…
+      {:else if newUnread > 0}{newUnread.toLocaleString()} new unread {newUnread === 1 ? "email" : "emails"}
+      {:else}No New Emails{/if}</p>
     {#if composeError}<p class="error" role="alert">Couldn't open the composer. Please try again.</p>{/if}
     {#if recent.length}
-      <div class="latest"><h2>Latest unread</h2><ul>
+      <div class="latest"><h2>New Unread Emails</h2><ul>
         {#each recent as row (row.messageId ?? row.id)}
           <li><button class="mail-preview" onclick={() => void open(row)}>
             <span class="sender">{row.fromName || row.fromAddr}</span>

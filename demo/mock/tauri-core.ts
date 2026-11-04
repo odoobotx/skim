@@ -15,6 +15,7 @@ const priorityTimes:Record<string,number>=JSON.parse(localStorage.getItem("skimd
 const priorityRows=new Set<number>(JSON.parse(localStorage.getItem("skimdemo.priority") ?? JSON.stringify(db.DEMO_PRIORITY_IDS)));
 const doneRows = new Set<number>(JSON.parse(localStorage.getItem("skimdemo.done") ?? "[]"));
 const readRows = new Set<number>([...doneRows, ...JSON.parse(localStorage.getItem("skimdemo.read") ?? "[]")]);
+const inboxSeen:Record<string,number> = JSON.parse(localStorage.getItem("skimdemo.inboxSeen") ?? "{}");
 if (localStorage.getItem("skimdemo.taskInbox") === "on") {
   db.INBOX_THREADS.push({ ...db.INBOX_THREADS[0], id: 109, subject: "A separate conversation with Anna" });
 }
@@ -212,13 +213,22 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       const list = db.THREADS_BY_FOLDER[args.folderId] ?? [];
       return ok(args.offset > 0 ? [] : list);
     }
-    case "list_recent_unread":
+    case "acknowledge_inbox": {
+      const rows=db.unifiedList("inbox");
+      for (const row of rows) if (!args.accountId || row.accountId===args.accountId) inboxSeen[row.accountId]=Math.max(inboxSeen[row.accountId] ?? 0,row.id);
+      localStorage.setItem("skimdemo.inboxSeen",JSON.stringify(inboxSeen));
+      return ok(undefined);
+    }
+    case "list_recent_unread": {
+      const rows=db.unifiedList("inbox").filter(row=>(!args.accountId || row.accountId===args.accountId) && !doneRows.has(row.id) && !row.isRead && !readRows.has(row.id) && row.id>(inboxSeen[row.accountId] ?? 0));
+      return ok({rows:rows.slice(0,5),total:rows.length});
+    }
     case "list_task_inbox": {
       const rows = MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row => ({...row, accountId: db.ACCOUNT.id}));
-      return ok([...rows].sort((a,b)=>cmd === "list_recent_unread" ? b.date-a.date : Number(priorityRows.has(b.id))-Number(priorityRows.has(a.id)) || b.date-a.date).filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)) && (cmd !== "list_recent_unread" || !(row.isRead || readRows.has(row.id))))
+      return ok([...rows].sort((a,b)=>Number(priorityRows.has(b.id))-Number(priorityRows.has(a.id)) || b.date-a.date).filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)))
         .map(row => ({...row, isDone: doneRows.has(row.id), isRead:row.isRead || readRows.has(row.id), pendingMove: false,priorityOverride:priorityOff.has(row.id) ? false : priorityRows.has(row.id) ? true : null,priorityAt:priorityTimes[row.id] ?? (priorityRows.has(row.id) ? row.date*1000 : 0),
           category: db.categoryFor(row.id)}))
-        .slice(args.offset ?? 0, cmd === "list_recent_unread" ? 5 : args.offset + args.limit));
+        .slice(args.offset ?? 0, args.offset + args.limit));
     }
     case "set_task_priority":
       if (localStorage.getItem("skimdemo.failPriority") === "on") return Promise.reject(new Error("Synthetic Priority failure"));

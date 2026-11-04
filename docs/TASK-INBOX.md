@@ -32,6 +32,22 @@ current preview has reached it.
 
 ## Current preview
 
+- Home shows **New Unread Emails** since the last Inbox visit, with durable
+  per-account Inbox checkpoints. Entering a unified Inbox acknowledges all its
+  accounts; entering one account acknowledges only that mailbox. Returning
+  Home shows **No New Emails** without changing read flags. IMAP UIDs and
+  UIDVALIDITY distinguish new deliveries from older cache backfill and handle
+  server UID resets; the email's Date header is not the arrival checkpoint.
+- Sent-copy ownership defaults to the provider for Gmail and the supported Zoho
+  SMTP hosts (including custom accounts using smtppro.zoho.com). Skim resyncs
+  Sent instead of appending an extra copy. Other servers keep client-side
+  copying. Each account has an Automatic / provider / Skim override for servers
+  whose automatic saving has been disabled. The policy is shared by message
+  sends and calendar replies. Existing remote copies are preserved.
+  Reference: https://www.zoho.com/mail/help/zoho-smtp.html#Duplicate_Sent_Copies
+- The Inbox reader has a message Priority toggle beside Back/Done, with I as
+  its shortcut. It shares sender-rule inheritance, message exceptions and
+  pending-action protection with the list. Stars/Pinned remain independent.
 - Compose, Reply and Forward open a non-modal bottom-right composer. Mail lists
   and readers remain usable behind it. Expand fills the app; minimize retains
   the editor; pop-out remains optional. Multiple drafts keep their own mounted

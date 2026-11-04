@@ -16,6 +16,7 @@ const ALLOWED: &[&str] = &[
     "inbox_show_done",
     "reading_layouts",
     "email_appearances",
+    "sent_copy_modes",
     "last_from_account",
     "sidebar_collapsed",
     "sidebar_unified_groups",

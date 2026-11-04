@@ -1,6 +1,7 @@
 <script lang="ts">
   import { aiErrorText, aiStream, api, errorMessage, reportError } from "../lib/api";
   import { getLocale, t } from "../lib/i18n/index.svelte";
+  import { isPriority } from "../lib/inbox";
   import { ai } from "../lib/stores/ai.svelte";
   import { aiSessions } from "../lib/stores/aiSession.svelte";
   import { mail } from "../lib/stores/mail.svelte";
@@ -379,6 +380,13 @@
   const anyStarred = $derived(mail.selectedThread?.isStarred ?? false);
   const isRead = $derived(mail.selectedThread?.isRead ?? true);
   const inInbox = $derived(mail.selectedFolder?.role === "inbox");
+  const priorityMarked = $derived(mail.selectedThread ? isPriority(mail.selectedThread,mail.senderRules) : false);
+  async function togglePriority() {
+    const row = mail.selectedThread;
+    if (!row || !inInbox || row.isDone) return;
+    try { await mail.togglePriority(row); }
+    catch(error) { reportError("inbox.priority",error);mail.noteError(t("ops.failed")); }
+  }
   let completing = $state(false);
 
   function backToList() {
@@ -521,6 +529,14 @@
     <header class="toolbar">
       {#if inInbox || mail.readingLayout === "full"}
         <BackDone onback={mail.readingLayout === "full" ? backToList : undefined} ondone={inInbox ? archive : undefined} done={mail.selectedThread?.isDone ?? false} disabled={completing} />
+      {/if}
+      {#if inInbox && mail.selectedThread && !mail.selectedThread.isDone}
+        <button class="tool priority-action" class:active={priorityMarked} aria-pressed={priorityMarked}
+          aria-label={t(priorityMarked ? "reading.remove_priority" : "reading.priority")}
+          title={`${t(priorityMarked ? "reading.remove_priority" : "reading.priority")} (I)`}
+          disabled={mail.priorityPending(mail.selectedThread)} onclick={() => void togglePriority()}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill={priorityMarked ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 1.5L3 9h4l-.5 5.5L13 6H9l.5-4.5z" /></svg>
+        </button>
       {/if}
       {#if mail.navigationRows.length > 1 && mail.navigationRows.some(row => row.id === mail.selectedThreadId)}
         <span class="browse-hint" title={`${t("shortcuts.next")} · ${t("shortcuts.prev")}`}><kbd>J</kbd><kbd>K</kbd><span>{t("reading.navigation_hint")}</span></span>
@@ -829,6 +845,7 @@
 
 <style>
   .pane {
+    container-type:inline-size;
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -982,6 +999,14 @@
   }
   .tool.starred {
     color: var(--text);
+  }
+  .tool.priority-action { width:34px; height:34px; padding:0; margin-right:8px; justify-content:center; border-radius:50%; }
+  .tool.priority-action.active { color:var(--accent); background:var(--accent-soft); }
+  .tool:disabled { opacity:.45; cursor:default; }
+  @container (max-width:640px) {
+    .toolbar { padding:10px 16px 8px; }
+    .toolbar .browse-hint, .toolbar .tool kbd { display:none; }
+    .toolbar .tool { width:32px; padding:0; justify-content:center; }
   }
   kbd {
     font-family: var(--font-mono);

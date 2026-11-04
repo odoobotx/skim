@@ -44,6 +44,17 @@
   $effect(() => {
     if (mail.selectedThreadId !== null && ui.recapOpen) ui.closeRecap();
   });
+  let lastInboxVisit: string | null = null;
+  $effect(() => {
+    const account = mail.unified ? null : mail.account?.id ?? null;
+    const visit = mail.booted && !ui.homeOpen && mail.selectedFolder?.role === "inbox"
+      ? `${account ?? "*"}:${mail.selectedFolderId}` : null;
+    if (visit === lastInboxVisit) return;
+    lastInboxVisit = visit;
+    if (visit !== null) {
+      void mail.acknowledgeInbox(account).catch(error => { reportError("home.visit",error);mail.noteError(t("ops.failed")); });
+    }
+  });
 
   // ---- AI recap ----
   // The digest is a chat session like any other, so it survives the panel
@@ -409,6 +420,14 @@
       case "KeyS":
         void actOnSelected("star");
         return;
+      case "KeyI": {
+        const row = mail.selectedThread;
+        if (!e.repeat && !mail.selecting && row && mail.selectedFolder?.role === "inbox" && !row.isDone) {
+          e.preventDefault();
+          void mail.togglePriority(row).catch(error => { reportError("inbox.priority",error);mail.noteError(t("ops.failed")); });
+        }
+        return;
+      }
       case "KeyU":
         void actOnSelected("unread");
         return;
