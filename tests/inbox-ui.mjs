@@ -155,7 +155,7 @@ try {
     const { mail } = await import("/src/lib/stores/mail.svelte.ts");
     return mail.selectedRows.map(row => row.id);
   }), [101, 109]);
-  await list.getByRole("button", { name: /Back to senders/ }).click();
+  await list.getByRole("button", { name: /Back to inbox/ }).click();
   // Category completion is one batch, not one backend request per message.
   const notificationsDone = list.getByRole("button", { name: "Mark Done: Notifications", exact: true });
   await notificationsDone.focus();
@@ -300,7 +300,7 @@ try {
 
   await page.getByRole("button", {name:"Back to list",exact:true}).click();
   assert.equal(await list.locator("button.row").count(),2,"Back preserves the sender drill-down");
-  await list.getByRole("button", {name:/Back to senders/}).click();
+  await list.getByRole("button", {name:/Back to inbox/}).click();
   await page.reload();
   await page.getByRole("button", {name:"Check Inbox"}).click();
   assert.equal(await page.evaluate(async () => (await import("/src/lib/stores/mail.svelte.ts")).mail.readingLayout),"full");
@@ -382,6 +382,122 @@ try {
     const {mail}=await import("/src/lib/stores/mail.svelte.ts");
     return mail.threads.length > 0 && mail.threads.every(row=>row.isDone && row.isRead) && mail.selectedFolder.unreadCount === 0;
   });
+
+  // The same Back/Done control owns the currently open group, never its parent.
+  const groupPage=await browser.newPage({viewport:{width:1155,height:956}});
+  groupPage.on("pageerror",error=>errors.push(error.message));
+  await groupPage.clock.setFixedTime(new Date("2026-11-18T18:00:00-06:00"));
+  await groupPage.addInitScript(()=>{
+    localStorage.setItem("skimdemo.taskInbox","on");
+    localStorage.setItem("skimdemo.settings",JSON.stringify({inbox_sender_rules:JSON.stringify({
+      "marcus@acme-partners.example":{priority:true},
+      "anna.weber@northwind.example":{group:true},
+      "brief@northstar.example":{category:"newsletters",group:true},
+      "alex@brightwave.io":{group:true},
+    })}));
+  });
+  await groupPage.goto("http://localhost:1421");
+  await groupPage.getByRole("button",{name:"Check Inbox",exact:true}).click();
+  const groupList=groupPage.locator("section.list"), groupActions=groupList.locator(".organize .leading-actions");
+  const batchLog=()=>groupPage.evaluate(async()=>(await import("/demo/mock/tauri-core.ts")).commandLog.filter(c=>c.cmd==="set_tasks_done"));
+  await groupList.getByRole("button",{name:/^Anna Weber/}).click();
+  assert.equal(await groupActions.getByRole("button").count(),2);
+  assert.equal(await groupActions.innerText(),"","Group navigation uses the same icon-only control as the reader");
+  await groupActions.getByRole("button",{name:"Back to inbox",exact:true}).click();
+  assert.equal((await batchLog()).length,0,"Back never changes mail");
+  await groupList.getByRole("button",{name:/^Anna Weber/}).click();
+  await groupActions.getByRole("button",{name:"Mark Done: Anna Weber",exact:true}).click();
+  await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
+  assert.deepEqual((await batchLog()).at(-1).args.threadIds.sort((a,b)=>a-b),[101,109]);
+  await groupList.getByRole("switch",{name:"Show Done",exact:true}).check();
+  await groupPage.waitForFunction(async()=>{
+    const {mail}=await import("/src/lib/stores/mail.svelte.ts");return [101,109].every(id=>mail.threads.some(row=>row.id===id && row.isDone && row.isRead));
+  });
+  await groupList.getByRole("button",{name:/^Anna Weber/}).click();
+  await groupActions.getByRole("button",{name:"Mark Undone: Anna Weber",exact:true}).click();
+  await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
+  assert.equal((await batchLog()).at(-1).args.done,false,"Completed groups can be restored as one batch");
+  await groupList.getByRole("button",{name:/^Anna Weber/}).click();
+  await groupPage.evaluate(()=>localStorage.setItem("skimdemo.failArchive","on"));
+  await groupActions.getByRole("button",{name:"Mark Done: Anna Weber",exact:true}).click();
+  await groupPage.locator("nav.sidebar .sync.error").waitFor();
+  await groupActions.getByRole("button",{name:"Mark Done: Anna Weber",exact:true}).waitFor();
+  assert.equal(await groupList.locator("button.row").count(),2,"Failed group completion restores rows and keeps the current group open");
+  await groupPage.evaluate(()=>localStorage.removeItem("skimdemo.failArchive"));
+  await groupPage.locator("nav.sidebar").getByRole("button",{name:/Settings$/}).click();
+  const beforeSettings=(await batchLog()).length;
+  await groupPage.keyboard.press("e");
+  assert.equal((await batchLog()).length,beforeSettings,"Group shortcuts do not complete mail behind Settings");
+  await groupPage.locator(".overlay .close").click();
+  await groupPage.keyboard.press("Escape");
+  await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
+
+  await groupList.getByRole("button",{name:/^Newsletters/}).click();
+  await groupList.getByRole("button",{name:/^Northstar Weekly/}).click();
+  await groupActions.getByRole("button",{name:"Back to Newsletters",exact:true}).click();
+  await groupActions.getByRole("button",{name:"Mark Done: Newsletters",exact:true}).waitFor();
+  await groupList.getByRole("button",{name:/^Northstar Weekly/}).click();
+  const northstarIds=await groupList.locator(".message-wrap [data-done-ids]").evaluateAll(els=>els.map(el=>Number(el.dataset.doneIds)));
+  assert.equal(northstarIds.length,6);
+  await groupPage.keyboard.press("e");
+  await groupActions.getByRole("button",{name:"Mark Done: Newsletters",exact:true}).waitFor();
+  assert.deepEqual((await batchLog()).at(-1).args.threadIds,northstarIds,"Nested group Done affects only that sender and returns one level");
+  await groupList.getByRole("button",{name:/^Northstar Weekly/}).click();
+  await groupList.locator("button.row").first().click();
+  await groupPage.locator(".reading-host .leading-actions").waitFor();
+  await groupPage.keyboard.press("Escape");
+  await groupActions.getByRole("button",{name:"Mark Undone: Northstar Weekly",exact:true}).waitFor();
+  await groupPage.keyboard.press("Escape");
+  await groupActions.getByRole("button",{name:"Mark Done: Newsletters",exact:true}).waitFor();
+  await groupPage.keyboard.press("Escape");
+  await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
+
+  await groupList.getByRole("button",{name:/^Notifications/}).click();
+  const notificationIds=await groupList.locator(".message-wrap [data-done-ids]").evaluateAll(els=>els.map(el=>Number(el.dataset.doneIds)));
+  await groupActions.getByRole("button",{name:"Mark Done: Notifications",exact:true}).click();
+  await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
+  assert.deepEqual((await batchLog()).at(-1).args.threadIds,notificationIds);
+  await groupList.locator(".priority").getByRole("button",{name:/^Show all/}).click();
+  const priorityIds=await groupList.locator(".message-wrap [data-done-ids]").evaluateAll(els=>els.map(el=>Number(el.dataset.doneIds)));
+  assert(priorityIds.length>5);
+  await groupPage.keyboard.press("e");
+  await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
+  assert.deepEqual((await batchLog()).at(-1).args.threadIds,priorityIds,"Priority group Done includes cards beyond the root's first five");
+
+  // Navigating during a pending save keeps the user's newer location.
+  await groupList.getByRole("button",{name:/^Anna Weber/}).click();
+  await groupPage.evaluate(async()=>{
+    const {api}=await import("/src/lib/api.ts");
+    const original=api.setTasksDone;
+    let release;
+    const gate=new Promise(resolve=>{release=resolve;});
+    window.releaseGroupSave=release;
+    api.setTasksDone=async(...args)=>{await gate;api.setTasksDone=original;return original(...args);};
+  });
+  await groupActions.getByRole("button",{name:"Mark Done: Anna Weber",exact:true}).click();
+  assert(await groupActions.locator(".done-action").isDisabled(),"A pending group save cannot be submitted twice");
+  await groupActions.getByRole("button",{name:"Back to inbox",exact:true}).click();
+  await groupList.getByRole("button",{name:/^Newsletters/}).click();
+  await groupPage.evaluate(()=>window.releaseGroupSave());
+  await groupActions.getByRole("button",{name:"Mark Done: Newsletters",exact:true}).waitFor();
+  await groupPage.waitForFunction(()=>!document.querySelector(".organize .done-action")?.disabled);
+  await groupList.locator(".group-heading").getByRole("heading",{name:"Newsletters",exact:true}).waitFor();
+
+  // Sent sender groups use the same Back control without offering Done.
+  await groupPage.evaluate(async()=>{
+    const {THREADS_BY_FOLDER}=await import("/demo/mock/data.ts");
+    THREADS_BY_FOLDER[3].push({...THREADS_BY_FOLDER[3][0],id:302,subject:"A second sent conversation"});
+  });
+  await groupPage.locator("nav.sidebar").getByRole("button",{name:/^Sent/}).click();
+  await groupList.locator(".group-row .summary").filter({hasText:"Alex Morgan"}).click();
+  assert.equal(await groupActions.getByRole("button").count(),1);
+  await groupActions.getByRole("button",{name:"Back to Sent",exact:true}).waitFor();
+  const beforeSent=(await batchLog()).length;
+  await groupPage.keyboard.press("e");
+  assert.equal((await batchLog()).length,beforeSent,"Done is never offered for a Sent group");
+  await groupPage.keyboard.press("Escape");
+  await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
+  await groupPage.close();
   assert.deepEqual(errors, []);
   console.log("Inbox UI passed: unread alignment, mixed date sections, section/group Done, reader Back/Done and E, Home, sidebar, sender drill-down, Show Done, sweep batching, failure recovery, Priority and unified Sent.");
 } finally {

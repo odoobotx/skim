@@ -4,8 +4,11 @@
   import { senderGroups, groupInbox, inboxTimeline, isPriority, inboxSection, senderAddress, type Category, type SenderRule, type SenderRules } from "../lib/inbox";
   import { t } from "../lib/i18n/index.svelte";
   import { mail, rowKey } from "../lib/stores/mail.svelte";
+  import { ui } from "../lib/stores/ui.svelte";
+  import { folderLabel } from "../lib/folders";
   import type { ThreadRow } from "../lib/types";
   import MessageRow from "./MessageRow.svelte";
+  import BackDone from "./BackDone.svelte";
 
   let { rules, saveRule }: {
     rules: SenderRules;
@@ -28,6 +31,15 @@
   const groups = $derived(senderGroups(scoped, rules));
   const opened = $derived(groups.find(group => group.key === sender));
   const openedRows = $derived(opened?.rows ?? []);
+  const inGroup = $derived(category !== null || sender !== null);
+  const groupRows = $derived(sender !== null ? openedRows : scoped);
+  const groupLabel = $derived(sender !== null ? opened?.label ?? t("inbox.empty_group") : t(`inbox.${category}`));
+  const groupDone = $derived(groupRows.length > 0 && groupRows.every(row => row.isDone));
+  const parentLabel = $derived(sender !== null && category !== null
+    ? t(`inbox.${category}`) : mail.selectedFolder ? folderLabel(mail.selectedFolder) : t("nav.inbox"));
+  const backLabel = $derived(isInbox && (sender === null || category === null)
+    ? t("inbox.back_inbox") : t("inbox.back_group", { group: parentLabel }));
+  let navigationVersion = 0;
 
   onMount(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -47,6 +59,7 @@
   $effect(() => {
     void mail.selectedFolderId;
     void mail.unified;
+    navigationVersion++;
     category = null;
     sender = null;
   });
@@ -57,15 +70,28 @@
         : groups.slice(0, limit).filter(g => g.rows.length === 1).flatMap(g => g.rows);
     mail.setNavigationRows(rows.map(rowKey));
   });
-  onDestroy(() => mail.setNavigationRows(null));
+  onDestroy(() => { navigationVersion++; mail.setNavigationRows(null); });
+  $effect(() => {
+    ui.setGroupNavigation(inGroup ? { back, done: isInbox ? () => void completeGroup() : undefined } : null);
+    return () => ui.setGroupNavigation(null);
+  });
 
   function navigate(nextCategory: string | null, nextSender: string | null = null) {
+    navigationVersion++;
     mail.clearSelection();
     mail.selectedThreadId = null;
     mail.selectedMessageId = null;
     category = nextCategory;
     sender = nextSender;
     limit = 100;
+  }
+  function back() { navigate(sender !== null ? category : null); }
+
+  async function completeGroup() {
+    const version = navigationVersion;
+    const success = await complete([...groupRows]);
+    // A queued completion must not pull the user back after they navigate elsewhere.
+    if (success && version === navigationVersion) back();
   }
 
   async function done(row: ThreadRow) {
@@ -93,10 +119,10 @@
   let root: HTMLDivElement;
 
   async function complete(rows: ThreadRow[], done = !rows.every(row => row.isDone)) {
-    if (!rows.length || busy.length) return;
+    if (!rows.length || busy.length) return false;
     busy = rows.map(rowKey);
-    try { await mail.setDoneRows(rows, done); }
-    catch (error) { reportError("inbox.done", error); mail.noteError(t("ops.failed")); }
+    try { await mail.setDoneRows(rows, done); return true; }
+    catch (error) { reportError("inbox.done", error); mail.noteError(t("ops.failed")); return false; }
     finally { busy = []; }
   }
   function begin(rows: ThreadRow[], event: PointerEvent) {
@@ -173,13 +199,14 @@
   </div>
 {/if}
 <div bind:this={root} class="organized" class:sweeping={sweep.length > 0}>
-<div class="organize">
-  {#if category !== null || sender !== null}
-    <button class="back" onclick={() => navigate(sender !== null ? category : null)}>
-      ← {sender !== null ? t("inbox.back_senders") : t("inbox.back_inbox")}
-    </button>
-  {/if}
-  <small>{t("inbox.loaded", { n: scoped.length })}</small>
+<div class="organize" class:drilldown={inGroup}>
+  {#if inGroup}
+    <BackDone onback={back} ondone={isInbox ? () => void completeGroup() : undefined}
+      {backLabel}
+      doneLabel={`${t(groupDone ? "inbox.mark_undone" : "inbox.mark_done")}: ${groupLabel}`}
+      done={groupDone} disabled={busy.length > 0 || groupRows.length === 0} />
+    <div class="group-heading"><h2>{groupLabel}</h2><small>{t("inbox.group_loaded", { n: groupRows.length })}</small></div>
+  {:else}<small>{t("inbox.loaded", { n: scoped.length })}</small>{/if}
 </div>
 
 {#snippet completion(label: string, rows: ThreadRow[])}
@@ -263,7 +290,6 @@
   {/each}
   {#if timeline.total > limit}<button class="more" onclick={() => limit += 100}>{t("inbox.show_more")}</button>{/if}
 {:else if sender !== null}
-  <h2>{opened?.label ?? t("inbox.empty_group")}</h2>
   {#each openedRows.slice(0, limit) as row (rowKey(row))}{@render message(row)}{/each}
   {#if openedRows.length > limit}<button class="more" onclick={() => limit += 100}>{t("inbox.show_more")}</button>{/if}
 {:else}
@@ -301,7 +327,11 @@
   .sender-menu .section-label { padding:10px 10px 4px; font-size:10px; color:var(--text-faint); }
   @media(hover:none) { .group-done, .sender-menu-trigger { opacity:1; } .group-row:has(.group-done) .unread-dot { opacity:0; } }
   .organize { padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-bottom: 1px solid var(--hairline); }
-  small, .back, .unread { font-size: 11px; color: var(--text-faint); }
+  .organize.drilldown { position:sticky; top:0; z-index:5; padding:12px; flex-wrap:nowrap; gap:12px; background:var(--bg); }
+  .group-heading { min-width:0; }
+  .group-heading h2 { padding:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:600; }
+  .group-heading small { display:block; margin-top:2px; }
+  small, .unread { font-size: 11px; color: var(--text-faint); }
   small { width: 100%; }
   .summary { display: block; width: 100%; text-align: left; padding: 12px 42px; border-bottom: 1px solid var(--hairline); border-radius:10px; transition:background 120ms; }
   .summary:hover { background: var(--hover); }

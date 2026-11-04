@@ -43,6 +43,13 @@ current preview has reached it.
   pairs an icon-only Back arrow with Done at the top left; E uses the same
   read-and-archive operation. Completing a message returns to the list even
   when Show Done is on. Back preserves category/sender drill-down context.
+- Messages, group drill-downs, drafts and recap share the same Back/Done
+  control. An open Inbox sender/category/Priority group offers Done for all
+  loaded conversations in that group, then returns one level; completed groups
+  offer Undone. Escape goes back one level and E uses the current message,
+  ticked selection or open group. Failures leave the group open for retry;
+  finishing a queued action never reverses a later navigation. Sent groups
+  offer Back only. Group navigation stays visible while scrolling.
 - Attachment and calendar-file opening resolves the real on-disk path before
   handing it to another app. This handles Windows redirected AppData caches;
   download behavior and cached files remain unchanged. Open/save failures show

@@ -4,6 +4,7 @@
   import Home from "./components/Home.svelte";
   import MessageList from "./components/MessageList.svelte";
   import ReadingPane from "./components/ReadingPane.svelte";
+  import BackDone from "./components/BackDone.svelte";
   import ComposeForm from "./components/ComposeForm.svelte";
   import AiAsk from "./components/AiAsk.svelte";
   import AiRecap from "./components/AiRecap.svelte";
@@ -344,6 +345,7 @@
       e.code === "KeyA" &&
       !isTyping() &&
       !palette.open &&
+      !ui.settingsOpen &&
       !ui.shortcutsOpen &&
       ui.movePicker === null &&
       ui.folderEditor === null &&
@@ -368,6 +370,7 @@
     if (e.key === "Escape" && inlineAsk) return;
     if (
       palette.open ||
+      ui.settingsOpen ||
       ui.shortcutsOpen ||
       ui.movePicker !== null ||
       ui.folderEditor !== null ||
@@ -392,7 +395,8 @@
         moveSelection(-1);
         return;
       case "KeyE":
-        void actOnSelected("archive");
+        if (!mail.selecting && mail.selectedThreadId === null && !ui.recapOpen && ui.groupNavigation) ui.groupNavigation.done?.();
+        else void actOnSelected("archive");
         return;
       case "KeyS":
         void actOnSelected("star");
@@ -462,7 +466,8 @@
         // the first thing Escape takes back.
         if (mail.selecting) mail.clearSelection();
         else if (ui.recapOpen) ui.closeRecap();
-        else mail.selectedThreadId = null;
+        else if (mail.selectedThreadId !== null) { mail.selectedThreadId = null; mail.selectedMessageId = null; }
+        else ui.groupNavigation?.back();
         break;
     }
   }
@@ -486,7 +491,7 @@
         {#if mail.selectedThreadId !== null || ui.recapOpen || mail.readingLayout === "split"}
         <div class="reading-host">
         {#if mail.readingLayout === "full" && ((mail.selectedFolder?.role === "drafts" && draftEditorId !== null) || (ui.recapOpen && mail.selectedThreadId === null))}
-          <div class="reading-nav"><button aria-label={t("reading.back_to_list")} title={t("reading.back_to_list")} onclick={() => { mail.selectedThreadId = null; mail.selectedMessageId = null; ui.closeRecap(); }}><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 10H4m6-6-6 6 6 6" /></svg></button></div>
+          <div class="reading-nav"><BackDone onback={() => { mail.selectedThreadId = null; mail.selectedMessageId = null; ui.closeRecap(); }} /></div>
         {/if}
         {#if mail.selectedFolder?.role === "drafts" && draftEditorId !== null}
           {#key draftEditorId}
@@ -550,7 +555,6 @@
   .list-host.reading-hidden { display:none; }
   .reading-host { display:flex; flex-direction:column; flex:1; min-width:0; min-height:0; overflow:hidden; }
   .reading-nav { padding:12px 24px; border-bottom:1px solid var(--hairline); }
-  .reading-nav button { font-size:12px; color:var(--text-dim); padding:4px 0; }
   .home-view :global(.titlebar) { position:absolute; inset:0 0 auto; z-index:10; background:transparent; border:0; box-shadow:none; }
   .home-view :global(.titlebar .brand) { visibility:hidden; }
   .home-view :global(.titlebar .ctl) { color:#fff; }

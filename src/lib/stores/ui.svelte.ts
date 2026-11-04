@@ -6,6 +6,7 @@ const media = window.matchMedia("(prefers-color-scheme: dark)");
 /** AI actions the reading pane exposes to the global keyboard handler. */
 type ReadingAiActions = { ask: () => void; translate: () => void };
 let readingAi: ReadingAiActions | null = null;
+let groupNavigation: { back: () => void; done?: () => void } | null = null;
 
 /** Message currently open in the reading pane. The palette chat reads it once
  * when a session starts; App tracks it to know whether the chat about that
@@ -183,6 +184,8 @@ export const ui = {
   setReadingAi(actions: ReadingAiActions | null) {
     readingAi = actions;
   },
+  get groupNavigation() { return groupNavigation; },
+  setGroupNavigation(actions: typeof groupNavigation) { groupNavigation = actions; },
   get openMessageId() {
     return openMessageId;
   },
