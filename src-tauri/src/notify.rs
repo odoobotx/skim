@@ -7,16 +7,22 @@ use crate::db::{queries, Db};
 use crate::state::AppState;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(target_os = "windows")]
 use windows::core::HSTRING;
+#[cfg(target_os = "windows")]
 use windows::Data::Xml::Dom::XmlDocument;
+#[cfg(target_os = "windows")]
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 
+#[cfg(target_os = "windows")]
 const AUMID: &str = "com.techsystech.skimtasks";
+#[cfg(target_os = "windows")]
 const URL_SCHEME: &str = "skimtasks";
 
 /// Where the toast icon lives. The notification platform silently drops
 /// images under hidden directories — the whole AppData tree included — so
 /// the icon goes to a visible per-user path (verified empirically on Win11).
+#[cfg(target_os = "windows")]
 pub fn toast_icon_path() -> Option<std::path::PathBuf> {
     let home = std::env::var("USERPROFILE").ok()?;
     Some(
@@ -32,6 +38,7 @@ pub fn toast_icon_path() -> Option<std::path::PathBuf> {
 /// builds — toasts actually display because the installer's Start Menu
 /// shortcut carries `System.AppUserModel.ID`. This entry supplements it
 /// with the display name and icon.
+#[cfg(target_os = "windows")]
 pub fn register_aumid() {
     use winreg::enums::{HKEY_CURRENT_USER, REG_EXPAND_SZ};
     use winreg::{RegKey, RegValue};
@@ -68,6 +75,7 @@ pub fn register_aumid() {
 /// and button clicks use `activationType="protocol"`, which the shell routes
 /// here — no COM activator or in-process message pump required (the reason
 /// the previous in-process `on_activated` callback never fired).
+#[cfg(target_os = "windows")]
 pub fn register_url_scheme() {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
@@ -89,6 +97,7 @@ pub fn register_url_scheme() {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn mark_read_label(locale: &str) -> &'static str {
     match locale {
         "ru" => "Прочитано",
@@ -197,38 +206,55 @@ pub async fn notify_new_mail(app: &AppHandle, db: &Db, message_pks: &[i64]) {
         body.push_str(&format!("  (+{})", message_pks.len() - 1));
     }
 
-    let ids_csv = message_pks
-        .iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let open_uri = match open_target {
-        Some((folder_id, thread_id, message_id)) => {
-            format!("skimtasks://open?folder={folder_id}&thread={thread_id}&message={message_id}")
+    #[cfg(target_os = "linux")]
+    {
+        use tauri_plugin_notification::NotificationExt;
+        // ponytail: native notification only; Windows toast quick actions stay Windows-only.
+        let _ = (locale, open_target);
+        if let Some(email) = account_email {
+            body.push_str(&format!("\n{email}"));
         }
-        None => "skimtasks://open".to_string(),
-    };
-    let read_uri = format!("skimtasks://read?ids={ids_csv}");
-    let mark_read = mark_read_label(&locale);
+        if let Err(e) = app.notification().builder().title(title).body(body).show() {
+            tracing::warn!(error = %e, "failed to show notification");
+        }
+    }
 
-    // Protocol-activated toast. A body click launches `open_uri`, the button
-    // `read_uri`; Windows shell-launches these through the registered `skimtasks:`
-    // scheme (register_url_scheme), so no COM activator or in-process message
-    // pump is needed — which is why the old in-process callback never fired.
-    // The header logo comes from the AUMID (Start Menu shortcut + IconUri),
-    // so no image goes inside the toast body.
-    // The third <text> renders as the toast's attribution line — used to name
-    // the receiving mailbox, but only when more than one account is connected.
-    let attribution = account_email
-        .map(|email| {
-            format!(
-                "\n            <text placement=\"attribution\">{}</text>",
-                xml_escape(&email)
-            )
-        })
-        .unwrap_or_default();
-    let xml = format!(
-        r#"<toast activationType="protocol" launch="{launch}">
+    #[cfg(target_os = "windows")]
+    {
+        let ids_csv = message_pks
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let open_uri = match open_target {
+            Some((folder_id, thread_id, message_id)) => {
+                format!(
+                    "skimtasks://open?folder={folder_id}&thread={thread_id}&message={message_id}"
+                )
+            }
+            None => "skimtasks://open".to_string(),
+        };
+        let read_uri = format!("skimtasks://read?ids={ids_csv}");
+        let mark_read = mark_read_label(&locale);
+
+        // Protocol-activated toast. A body click launches `open_uri`, the button
+        // `read_uri`; Windows shell-launches these through the registered `skimtasks:`
+        // scheme (register_url_scheme), so no COM activator or in-process message
+        // pump is needed — which is why the old in-process callback never fired.
+        // The header logo comes from the AUMID (Start Menu shortcut + IconUri),
+        // so no image goes inside the toast body.
+        // The third <text> renders as the toast's attribution line — used to name
+        // the receiving mailbox, but only when more than one account is connected.
+        let attribution = account_email
+            .map(|email| {
+                format!(
+                    "\n            <text placement=\"attribution\">{}</text>",
+                    xml_escape(&email)
+                )
+            })
+            .unwrap_or_default();
+        let xml = format!(
+            r#"<toast activationType="protocol" launch="{launch}">
     <visual>
         <binding template="ToastGeneric">
             <text>{title}</text>
@@ -239,23 +265,25 @@ pub async fn notify_new_mail(app: &AppHandle, db: &Db, message_pks: &[i64]) {
         <action content="{mark}" activationType="protocol" arguments="{read}"/>
     </actions>
 </toast>"#,
-        launch = xml_escape(&open_uri),
-        title = xml_escape(&title),
-        body = xml_escape(&body),
-        mark = xml_escape(mark_read),
-        read = xml_escape(&read_uri),
-    );
+            launch = xml_escape(&open_uri),
+            title = xml_escape(&title),
+            body = xml_escape(&body),
+            mark = xml_escape(mark_read),
+            read = xml_escape(&read_uri),
+        );
 
-    // WinRT toast objects are !Send — build and show on a blocking thread.
-    let _ = tokio::task::spawn_blocking(move || {
-        if let Err(e) = show_toast_xml(&xml) {
-            tracing::warn!(error = %e, "failed to show toast");
-        }
-    })
-    .await;
+        // WinRT toast objects are !Send — build and show on a blocking thread.
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = show_toast_xml(&xml) {
+                tracing::warn!(error = %e, "failed to show toast");
+            }
+        })
+        .await;
+    }
 }
 
 /// Build and display a toast from a raw XML document under Skim's AUMID.
+#[cfg(target_os = "windows")]
 fn show_toast_xml(xml: &str) -> windows::core::Result<()> {
     let doc = XmlDocument::new()?;
     doc.LoadXml(&HSTRING::from(xml))?;
@@ -264,6 +292,7 @@ fn show_toast_xml(xml: &str) -> windows::core::Result<()> {
     notifier.Show(&toast)
 }
 
+#[cfg(target_os = "windows")]
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

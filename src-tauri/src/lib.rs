@@ -14,11 +14,10 @@ use state::AppState;
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 
-/// Roaming app-data dir (`%APPDATA%\com.techsystech.skimtasks`) — the same place Tauri's
-/// `app_data_dir()` resolves to on Windows, computed without an `AppHandle` so
-/// the panic hook can reach it before setup runs.
+/// The same OS data directory as Tauri, without an AppHandle so the panic hook
+/// can reach it before setup runs.
 fn app_data_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("com.techsystech.skimtasks"))
+    dirs::data_dir().map(|p| p.join("com.techsystech.skimtasks"))
 }
 
 /// Past this a diagnostic log is old news; the file is started over rather than
@@ -210,8 +209,11 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir).ok();
-            notify::register_aumid();
-            notify::register_url_scheme();
+            #[cfg(target_os = "windows")]
+            {
+                notify::register_aumid();
+                notify::register_url_scheme();
+            }
             let db = db::Db::open(&data_dir.join("skim.db"))?;
             app.manage(AppState::new(db.clone(), data_dir.clone()));
 
@@ -462,7 +464,7 @@ fn setup_tray(app: &tauri::AppHandle, locale: &str) -> tauri::Result<()> {
         .icon(app.default_window_icon().expect("bundled icon").clone())
         .tooltip("Skim")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(cfg!(target_os = "linux"))
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
             "quit" => app.exit(0),

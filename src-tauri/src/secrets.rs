@@ -1,4 +1,4 @@
-//! Secrets live in the Windows Credential Manager, never in the database.
+//! Secrets live in the OS credential store, never in the database.
 //!
 //! One credential entry only holds so much text, and a Microsoft refresh token
 //! does not fit in one. A secret that is too long is split across numbered
@@ -34,6 +34,7 @@ const _: () = assert!(CHUNK_UNITS >= 2 && CHUNK_UNITS <= WINDOWS_LIMIT_UNITS);
 const MARKER: &str = "\u{1}skim-chunks-v1:";
 
 /// The Win32 code behind a keyring failure, when there is one.
+#[cfg(target_os = "windows")]
 fn win32_code(e: &keyring::Error) -> Option<u32> {
     match e {
         keyring::Error::PlatformFailure(inner) | keyring::Error::NoStorageAccess(inner) => {
@@ -41,6 +42,11 @@ fn win32_code(e: &keyring::Error) -> Option<u32> {
         }
         _ => None,
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_code(_: &keyring::Error) -> Option<u32> {
+    None
 }
 
 /// Give the UI a stable code to explain the failure by, and keep the raw Windows
@@ -334,6 +340,7 @@ mod tests {
 
     const KEY: &str = "mail:11111111-2222-3333-4444-555555555555";
 
+    #[cfg(target_os = "windows")]
     fn platform_failure(code: u32) -> keyring::Error {
         keyring::Error::PlatformFailure(Box::new(keyring::windows::Error(code)))
     }
@@ -421,6 +428,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn a_full_vault_is_reported_as_such() {
         let err = store_err(platform_failure(ERROR_NOT_ENOUGH_MEMORY));
         assert_eq!(err.code(), "secrets_full");
@@ -429,6 +437,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn other_failures_keep_their_own_codes() {
         assert_eq!(store_err(platform_failure(1)).code(), "secrets");
         assert_eq!(
@@ -438,6 +447,17 @@ mod tests {
             .code(),
             "secrets_unavailable"
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    #[ignore = "requires an unlocked desktop Secret Service; run in dbus-run-session"]
+    fn linux_keyring_roundtrip() {
+        let key = format!("linux-build-test:{}", uuid::Uuid::new_v4());
+        set(&key, "skim-test-secret").unwrap();
+        assert_eq!(get(&key).unwrap().as_deref(), Some("skim-test-secret"));
+        delete(&key).unwrap();
+        assert_eq!(get(&key).unwrap(), None);
     }
 
     #[test]

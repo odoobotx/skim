@@ -5,8 +5,10 @@
 //! ~\.skim) at startup — run Skim once before this so the toast shows the
 //! proper name and icon.
 
+#[cfg(target_os = "windows")]
 use tauri_winrt_notification::Toast;
 
+#[cfg(target_os = "windows")]
 fn main() {
     let r = Toast::new("com.skim.app")
         .title("Skim — toast smoke test")
@@ -15,4 +17,9 @@ fn main() {
         .show();
     println!("toast -> {r:?}");
     std::thread::sleep(std::time::Duration::from_secs(3));
+}
+
+#[cfg(not(target_os = "windows"))]
+fn main() {
+    eprintln!("This smoke test exercises Windows toasts only.");
 }

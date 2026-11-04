@@ -169,10 +169,12 @@ fn filter_style(value: &str) -> Option<String> {
 /// Resolve a `cid:` reference to the URL served by the `skim-cid` protocol.
 /// (On Windows, Tauri custom protocols are exposed as `http://<scheme>.localhost/`.)
 pub fn cid_url(message_id: i64, content_id: &str) -> String {
-    format!(
-        "http://skim-cid.localhost/{message_id}/{}",
-        urlencode(content_id)
-    )
+    let origin = if cfg!(target_os = "windows") {
+        "http://skim-cid.localhost"
+    } else {
+        "skim-cid://localhost"
+    };
+    format!("{origin}/{message_id}/{}", urlencode(content_id))
 }
 
 fn urlencode(s: &str) -> String {
@@ -383,6 +385,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inline_images_use_the_native_webview_protocol() {
+        let expected = if cfg!(target_os = "windows") {
+            "http://skim-cid.localhost/42/logo%40mail"
+        } else {
+            "skim-cid://localhost/42/logo%40mail"
+        };
+        assert_eq!(cid_url(42, "logo@mail"), expected);
+        let rendered = sanitize_email_html(r#"<img src="cid:logo@mail">"#, 42, false);
+        assert!(rendered.html.contains(expected));
+        assert_eq!(rendered.blocked_images, 0);
+    }
+
+    #[test]
     fn embedded_styles_keep_logo_and_message_constraints() {
         let rendered = sanitize_email_html(
             include_str!("../../../tests/fixtures/email-rendering.html"),
@@ -395,7 +410,7 @@ mod tests {
         assert!(rendered.html.contains("display:none"));
         assert!(!rendered.html.contains("<style"));
         assert!(!rendered.html.contains("class="));
-        assert!(rendered.html.contains("http://skim-cid.localhost/1/logo"));
+        assert!(rendered.html.contains(&cid_url(1, "logo")));
     }
 
     #[test]
