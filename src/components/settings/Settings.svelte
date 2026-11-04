@@ -105,6 +105,8 @@
   let imagesPolicy = $state("block");
   let notifications = $state("on");
   let groupThreads = $state("on");
+  let sentCopyModes = $state<Record<string,"auto" | "server" | "client">>({});
+  let sentCopySaving = $state(false);
   let autostart = $state(true);
   // Which account's disconnect button is in its "confirm?" state.
   let confirmingRemoveId = $state<string | null>(null);
@@ -157,6 +159,12 @@
       if (s.images_policy) imagesPolicy = s.images_policy;
       if (s.notifications) notifications = s.notifications;
       if (s.group_threads) groupThreads = s.group_threads;
+      try {
+        const modes: unknown = JSON.parse(s.sent_copy_modes ?? "{}");
+        if (modes && typeof modes === "object" && !Array.isArray(modes)) {
+          sentCopyModes = Object.fromEntries(Object.entries(modes).filter(([,mode]) => ["auto","server","client"].includes(mode)));
+        }
+      } catch { sentCopyModes = {}; }
       if (s.ai_user_name) aiName = s.ai_user_name;
       if (s.ai_style) aiStyle = s.ai_style;
       if (s.ai_instructions) aiInstructions = s.ai_instructions;
@@ -431,6 +439,16 @@
     await mail.setGroupThreads(value === "on");
   }
 
+  async function setSentCopyMode(accountId: string, mode: "auto" | "server" | "client") {
+    if (sentCopySaving) return;
+    const before = sentCopyModes;
+    sentCopyModes = {...before,[accountId]:mode};
+    sentCopySaving = true;
+    try { await api.setSetting("sent_copy_modes",JSON.stringify(sentCopyModes)); }
+    catch(error) { sentCopyModes = before;reportError("sent_copy.save",error);mail.noteError(t("ops.failed")); }
+    finally { sentCopySaving = false; }
+  }
+
   /** Saving a key can fail because Windows won't store it — say so plainly
    *  instead of handing the user a Win32 code. */
   function aiKeyError(e: unknown): string {
@@ -647,6 +665,16 @@
                     <option value="original">Original email · sender's colors</option>
                   </select>
                   <span class="dim hint">Applies to all mail from this account, including All inboxes.</span>
+                </label>
+                <label class="writer-field">
+                  <span class="microlabel">{t("settings.sent_copies")}</span>
+                  <select aria-label={t("settings.sent_copies")} value={sentCopyModes[account.id] ?? "auto"} disabled={sentCopySaving}
+                    onchange={(event) => void setSentCopyMode(account.id,event.currentTarget.value as "auto" | "server" | "client")}>
+                    <option value="auto">{t("settings.sent_auto")}</option>
+                    <option value="server">{t("settings.sent_server")}</option>
+                    <option value="client">{t("settings.sent_client")}</option>
+                  </select>
+                  <span class="dim hint">{t("settings.sent_hint")}</span>
                 </label>
                 <label class="writer-field">
                   <span class="microlabel">{t("settings.sender_name")}</span>

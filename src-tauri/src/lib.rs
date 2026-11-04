@@ -342,6 +342,7 @@ pub fn run() {
             commands::mail::list_threads,
             commands::mail::list_task_inbox,
             commands::mail::list_recent_unread,
+            commands::mail::acknowledge_inbox,
             commands::mail::set_thread_done,
             commands::mail::set_tasks_done,
             commands::mail::set_task_priority,

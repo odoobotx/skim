@@ -35,15 +35,16 @@ try {
     }) }));
   });
   await page.goto("http://localhost:1421");
-  await page.getByRole("button", { name: "Check Inbox" }).waitFor();
+  try { await page.getByRole("button", { name: "Check Inbox" }).waitFor(); }
+  catch(error) { console.error("Startup errors:",errors);console.error((await page.locator("body").innerText()).slice(0,1000));throw error; }
   assert.equal(await page.locator("nav.sidebar").count(), 0, "Home must be separate from inbox navigation");
   await page.getByRole("button", {name:"Search mail",exact:true}).waitFor();
   await page.getByRole("button", {name:"Compose",exact:true}).click();
-  await page.waitForFunction(async () => {
-    const { commandLog } = await import("/demo/mock/tauri-core.ts");
-    return commandLog.some(call => call.cmd === "open_compose_window");
-  });
+  await page.locator(".compose-dock").waitFor();
+  await page.getByRole("button",{name:"Close and save draft",exact:true}).click();
+  await page.locator(".compose-dock").waitFor({state:"hidden"});
   await page.locator(".mail-preview").first().waitFor();
+  await page.getByRole("heading",{name:"New Unread Emails",exact:true}).waitFor();
   assert((await page.locator(".mail-preview").count()) <= 5);
   await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });
   await page.screenshot({ path: new URL("../demo/output/home.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
@@ -182,6 +183,15 @@ try {
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
   assert.equal(await list.locator(".priority button.row").filter({ hasText: "Priya Nair" }).count(), 1);
   const inherited=list.locator(".message-wrap").filter({hasText:"Design review moved to Friday"});
+  await inherited.locator("button.row").click();
+  const inheritedToolbar=page.locator(".reading-host .toolbar");
+  await inheritedToolbar.getByRole("button",{name:"Remove Priority",exact:true}).waitFor();
+  await page.keyboard.press("i");
+  await inheritedToolbar.getByRole("button",{name:"Mark as Priority",exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>JSON.parse(JSON.parse(localStorage.getItem("skimdemo.settings")).inbox_sender_rules)["priya@brightwave.io"].priority),true,"Reader toggle changes the message exception, not the sender rule");
+  await page.keyboard.press("i");
+  await inheritedToolbar.getByRole("button",{name:"Remove Priority",exact:true}).waitFor();
+  await page.getByRole("button",{name:"Back to list",exact:true}).click();
   await inherited.getByRole("button",{name:"Remove message Priority",exact:true}).click();
   await page.waitForFunction(async()=> {
     const {mail}=await import("/src/lib/stores/mail.svelte.ts");
@@ -291,6 +301,10 @@ try {
   await page.locator("nav.sidebar").getByRole("button",{name:/Settings$/}).click();
   await page.locator(".overlay .chevron").first().click();
   assert.equal(await page.getByLabel("Email appearance",{exact:true}).inputValue(),"theme");
+  assert.equal(await page.getByLabel("Sent mail copies",{exact:true}).inputValue(),"auto");
+  await page.getByLabel("Sent mail copies",{exact:true}).selectOption("server");
+  await page.waitForFunction(()=>JSON.parse(JSON.parse(localStorage.getItem("skimdemo.settings")).sent_copy_modes)["acc-1"]==="server");
+  assert.equal(await page.evaluate(()=>JSON.parse(JSON.parse(localStorage.getItem("skimdemo.settings")).sent_copy_modes)["acc-2"]),undefined,"Sent-copy override is scoped to one account");
   await page.getByLabel("Email appearance",{exact:true}).selectOption("original");
   await page.locator(".overlay .close").click();
   await page.waitForFunction(() => {
@@ -313,6 +327,20 @@ try {
     const body=document.querySelector("iframe")?.contentDocument?.body;
     return body && getComputedStyle(body).backgroundColor!=="rgb(255, 255, 255)";
   });
+  await readerToolbar.getByRole("button",{name:"Mark as Priority",exact:true}).click();
+  await readerToolbar.getByRole("button",{name:"Remove Priority",exact:true}).waitFor();
+  assert.equal(await page.evaluate(async()=>(await import("/src/lib/stores/mail.svelte.ts")).mail.selectedThread.isStarred),false,"Priority is independent of stars/Pinned");
+  await page.getByRole("button",{name:"Back to list",exact:true}).click();
+  assert.equal(await list.locator(".priority button.row").filter({hasText:"City Utilities"}).count(),1);
+  await list.locator("button.row").filter({hasText:"City Utilities"}).click();
+  await page.keyboard.press("i");
+  await readerToolbar.getByRole("button",{name:"Mark as Priority",exact:true}).waitFor();
+  await page.evaluate(()=>localStorage.setItem("skimdemo.failPriority","on"));
+  await readerToolbar.getByRole("button",{name:"Mark as Priority",exact:true}).click();
+  await readerToolbar.getByRole("button",{name:"Mark as Priority",exact:true}).waitFor();
+  await page.waitForFunction(async()=>!(await import("/src/lib/stores/mail.svelte.ts")).mail.priorityPending((await import("/src/lib/stores/mail.svelte.ts")).mail.selectedThread));
+  assert.equal(await readerToolbar.getByRole("button",{name:"Mark as Priority",exact:true}).getAttribute("aria-pressed"),"false");
+  await page.evaluate(()=>localStorage.removeItem("skimdemo.failPriority"));
   await page.getByRole("button",{name:"Back to list",exact:true}).click();
 
   // Reader Done and E use the same read-and-archive operation, even with Show Done on.
@@ -370,6 +398,19 @@ try {
   }
   await page.evaluate(async () => (await import("/src/lib/stores/ui.svelte.ts")).ui.setTheme("moonlit","dark"));
   await page.screenshot({path:new URL("../demo/output/task-inbox-moonlit.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
+
+  const selectedFlatId=await page.evaluate(async()=>{
+    const {mail}=await import("/src/lib/stores/mail.svelte.ts");
+    await mail.setGroupThreads(false);
+    const first=mail.threads[0];first.messageId=70001;
+    mail.threads.push({...first,messageId:70002});
+    mail.selectedThreadId=first.id;mail.selectedMessageId=70002;
+    const selected=mail.selectedThread?.messageId;
+    mail.selectedThreadId=null;mail.selectedMessageId=null;
+    await mail.setGroupThreads(true);
+    return selected;
+  });
+  assert.equal(selectedFlatId,70002,"Flat reading targets the selected message rather than the first row sharing its thread");
 
   await page.evaluate(async () => {
     const {mail}=await import("/src/lib/stores/mail.svelte.ts");
@@ -498,6 +539,43 @@ try {
   await groupPage.keyboard.press("Escape");
   await groupPage.waitForFunction(()=>document.querySelector(".organize.drilldown")===null);
   await groupPage.close();
+
+  // Home tracks Inbox visits, not read flags or the message's Date header.
+  const homePage=await browser.newPage({viewport:{width:1440,height:1000},timezoneId:"America/Chicago"});
+  homePage.on("pageerror",error=>errors.push(error.message));
+  await homePage.addInitScript(()=>{
+    if(localStorage.getItem("skimdemo.settings")) return;
+    localStorage.setItem("skimdemo.settings",JSON.stringify({active_account:"acc-1"}));
+  });
+  await homePage.goto("http://localhost:1421");
+  await homePage.getByRole("heading",{name:"New Unread Emails",exact:true}).waitFor();
+  const unreadBeforeVisit=await homePage.evaluate(async()=>{
+    const {api}=await import("/src/lib/api.ts");return (await api.listTaskInbox("acc-1",false,true,0,100)).filter(row=>!row.isRead).length;
+  });
+  await homePage.getByRole("button",{name:"Check Inbox",exact:true}).click();
+  await homePage.locator("nav.sidebar").getByRole("button",{name:"Home",exact:true}).click();
+  await homePage.getByText("No New Emails",{exact:true}).waitFor();
+  assert.equal(await homePage.locator(".mail-preview").count(),0);
+  assert.equal(await homePage.evaluate(async()=>{
+    const {api}=await import("/src/lib/api.ts");return (await api.listTaskInbox("acc-1",false,true,0,100)).filter(row=>!row.isRead).length;
+  }),unreadBeforeVisit,"Visiting Inbox does not mark unread mail read");
+  const otherSummary=await homePage.evaluate(async()=>(await import("/src/lib/api.ts")).api.listRecentUnread("acc-2"));
+  assert(otherSummary.total>0,"Visiting one account leaves the other account's new unread intact");
+  await homePage.reload();
+  await homePage.getByText("No New Emails",{exact:true}).waitFor();
+  await homePage.evaluate(async()=>{
+    const {INBOX_THREADS}=await import("/demo/mock/data.ts");
+    INBOX_THREADS.push({...INBOX_THREADS[0],id:9001,subject:"New arrival with yesterday's date",date:Math.floor(Date.now()/1000)-86400,isRead:false});
+    const {mail}=await import("/src/lib/stores/mail.svelte.ts");await mail.refreshThreads();
+  });
+  await homePage.getByText("1 new unread email",{exact:true}).waitFor();
+  await homePage.locator(".mail-preview").filter({hasText:"New arrival with yesterday's date"}).waitFor();
+  await homePage.screenshot({path:new URL("../demo/output/home-new-unread.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
+  await homePage.getByRole("button",{name:"Check Inbox",exact:true}).click();
+  await homePage.locator("nav.sidebar").getByRole("button",{name:"Home",exact:true}).click();
+  await homePage.getByText("No New Emails",{exact:true}).waitFor();
+  await homePage.screenshot({path:new URL("../demo/output/home-no-new.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
+  await homePage.close();
   assert.deepEqual(errors, []);
   console.log("Inbox UI passed: unread alignment, mixed date sections, section/group Done, reader Back/Done and E, Home, sidebar, sender drill-down, Show Done, sweep batching, failure recovery, Priority and unified Sent.");
 } finally {

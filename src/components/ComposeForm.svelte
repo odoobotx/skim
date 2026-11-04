@@ -2,8 +2,9 @@
   // The compose/edit surface, decoupled from any window. Rendered both inside
   // its own native window (Composer.svelte, `chrome` on) and inline in the
   // reading pane for editing a draft from the Drafts folder (`chrome` off).
-  import { onDestroy } from "svelte";
-  import { aiStream, api, errorMessage } from "../lib/api";
+  import { onDestroy, tick, untrack } from "svelte";
+  import { aiStream, api, errorMessage, reportError } from "../lib/api";
+  import { splitComposeQuote } from "../lib/compose";
   import { t } from "../lib/i18n/index.svelte";
   import { createSlowStart } from "../lib/slow-start.svelte";
   import { ai } from "../lib/stores/ai.svelte";
@@ -18,6 +19,8 @@
     onDiscarded,
     onClose,
     onLocalSave,
+    active = true,
+    expanded = true,
   }: {
     draftId: number;
     /** Render the native-window titlebar (min/max/close). Off when inline. */
@@ -27,6 +30,8 @@
     onClose?: () => void;
     /** Fired after a debounced local autosave so a host can patch its list. */
     onLocalSave?: (draft: Draft) => void;
+    active?: boolean;
+    expanded?: boolean;
   } = $props();
 
   let draft = $state<Draft | null>(null);
@@ -34,6 +39,27 @@
   let sending = $state(false);
   let error = $state("");
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saveQueue = Promise.resolve();
+  let editVersion = 0;
+  let closing = $state(false);
+  let saving = $state(false);
+  let changingFrom = $state(false);
+  let bodyEl = $state<HTMLTextAreaElement>();
+  let toField = $state<AddressInput>();
+  let focusedOnce = false;
+  let lastFocus: HTMLElement | null = null;
+  let quoteExpanded = $state(false);
+  const bodyParts = $derived(splitComposeQuote(draft?.body ?? ""));
+  $effect(() => {
+    const id = draft?.id;
+    if (!id || !active || !bodyEl || !toField) return;
+    untrack(() => {
+      if (focusedOnce && lastFocus?.isConnected) lastFocus.focus({preventScroll:true});
+      else if (draft?.mode === "new") toField?.focus(true);
+      else { bodyEl?.focus({preventScroll:true}); bodyEl?.setSelectionRange(0,0); }
+      focusedOnce = true;
+    });
+  });
   // Once the draft has been sent or discarded, teardown must not resurrect it
   // with a write-back.
   let settled = false;
@@ -41,12 +67,11 @@
   // merely opening a draft and leaving never rewrites it (which would, for an
   // HTML draft, flatten it to plain text on the server).
   let dirty = false;
-  // Explicit-save state for the standalone compose window (`chrome`): 'clean'
+  // Explicit-save state: 'clean'
   // shows nothing, 'dirty' shows the Save button, 'saved' shows "Saved". Editing
-  // after a save flips it back to 'dirty'. Unused in the inline editor.
+  // after a save flips it back to 'dirty'.
   let saveState = $state<"clean" | "dirty" | "saved">("clean");
-  // Set once the draft has been committed to the Drafts folder, so closing the
-  // window keeps it instead of dropping the (now real) draft.
+  // A committed draft stays in its mailbox even if the editor is now empty.
   let committed = $state(false);
 
   // For the From picker (several mailboxes, fresh compose only). Replies keep
@@ -61,8 +86,11 @@
   );
 
   async function changeFrom(accountId: string) {
-    if (!draft || accountId === draft.accountId) return;
+    if (!draft || changingFrom || accountId === draft.accountId) return;
+    changingFrom = true;
     try {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      await persist();
       // The signature belongs to the mailbox, so the backend swaps it and hands
       // back the rewritten body — an untouched block only, never a hand edit.
       // Send what the editor holds, not what the database last saw: the save is
@@ -71,13 +99,15 @@
       const moved = await api.setDraftAccount(draft.id, accountId, draft.body);
       draft.accountId = accountId;
       draft.body = moved.body;
+      scheduleSave();
     } catch (e) {
       error = errorMessage(e);
-    }
+    } finally { changingFrom = false; }
   }
 
   /** Mark an edit: guards the inline write-back and drives the window Save state. */
   function markDirty() {
+    editVersion++;
     dirty = true;
     saveState = "dirty";
   }
@@ -194,6 +224,7 @@
   const SIG_MARK = "\n\n-- \n";
   /** Signature and quoted original, preserved below AI-generated text. */
   let quotedTail = "";
+  let bodyBeforeAi = "";
 
   // The AI drafting session: one shared conversation the user refines turn by
   // turn. User turns are instructions; assistant turns are the drafts the AI
@@ -275,6 +306,7 @@
     cancelAi?.();
     aiBusy = true;
     error = "";
+    bodyBeforeAi = draft.body;
     draft.body = quotedTail;
     slowStart.arm();
     let streamed = "";
@@ -322,7 +354,7 @@
             // Nothing usable came back — leave the instruction sitting in the
             // input (never committed, never cleared) and just say so.
             error = t("ai.empty_response");
-            if (draft && quotedTail && !draft.body) draft.body = quotedTail;
+            if (draft) draft.body = bodyBeforeAi;
           }
           aiBusy = false;
           scheduleSave();
@@ -333,7 +365,7 @@
           error = message;
           // The instruction was never committed or cleared, so it's still in
           // the input for the user to retry or fix — nothing to roll back.
-          if (draft && quotedTail && !draft.body) draft.body = quotedTail;
+          if (draft && !streamed.trim()) draft.body = bodyBeforeAi;
         },
       },
     );
@@ -374,9 +406,14 @@
   }
 
   function stopAi() {
+    const wasBusy = aiBusy;
     cancelAi?.();
     aiBusy = false;
     slowStart.clear();
+    if (wasBusy && draft) {
+      if (draft.body === quotedTail) draft.body = bodyBeforeAi;
+      scheduleSave();
+    }
     // The pending instruction was never committed to the session, so it stays
     // put in the input — nothing to roll back.
   }
@@ -398,38 +435,48 @@
   function scheduleSave() {
     markDirty();
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-      if (!draft) return;
-      const snapshot = $state.snapshot(draft) as Draft;
-      await api.updateDraft(snapshot);
-      // Let an inline host reflect the edit in its list row (subject/preview).
-      onLocalSave?.(snapshot);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      void persist().catch(e => { error = errorMessage(e); reportError("compose.autosave",e); });
     }, 800);
   }
 
-  /** Persist to the server: for a Drafts-folder draft this queues the write-back
-   *  to the IMAP Drafts folder; for a local-only draft it just saves locally. */
+  function persist(server = false): Promise<void> {
+    if (!draft) return Promise.resolve();
+    const snapshot = $state.snapshot(draft) as Draft;
+    // A slow autosave must finish before Send, Close or a newer save.
+    saveQueue = saveQueue.catch(() => {}).then(async () => {
+      if (server) await api.saveServerDraft(snapshot); else await api.updateDraft(snapshot);
+      onLocalSave?.(snapshot);
+    });
+    return saveQueue;
+  }
+
+  /** Save locally and queue the IMAP Drafts write-back before leaving. */
   async function flushServer() {
     // Nothing the user changed → don't rewrite the server copy.
-    if (!draft || !dirty) return;
+    if (!draft || !dirty) return true;
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
     try {
-      await api.saveServerDraft($state.snapshot(draft) as Draft);
-    } catch {
-      // Best effort — the local autosave already captured the text.
+      await persist(true);
+      return true;
+    } catch (e) {
+      error = errorMessage(e);
+      reportError("compose.save",e);
+      return false;
     }
   }
 
   async function send() {
-    if (!draft || sending) return;
+    if (!draft || sending || closing || aiBusy || !draft.to.trim()) return;
     sending = true;
     error = "";
     try {
-      if (saveTimer) clearTimeout(saveTimer);
-      await api.updateDraft($state.snapshot(draft) as Draft);
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      await persist();
       await api.sendDraft(draft.id);
       settled = true;
       // Remember the mailbox for the next fresh compose in the unified view.
@@ -438,81 +485,104 @@
     } catch (e) {
       error = errorMessage(e);
       sending = false;
+      await tick();
+      lastFocus?.focus({preventScroll:true});
     }
   }
 
   async function discard() {
-    settled = true;
-    if (draft) await api.deleteDraft(draft.id).catch(() => {});
-    onDiscarded?.();
+    if (!draft || sending || closing) return;
+    closing = true;
+    stopAi();
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    try {
+      await saveQueue.catch(() => {});
+      await api.deleteDraft(draft.id);
+      settled = true;
+      onDiscarded?.();
+    } catch (e) { error = errorMessage(e); closing = false; }
   }
 
   /** Explicit save from the compose window: commit the draft to the Drafts
    *  folder so it becomes a real, reopenable message. Optimistic — if offline
    *  the queued op drains later. */
   async function save() {
-    if (!draft || saveState !== "dirty") return;
+    if (!draft || saveState !== "dirty" || saving || sending || closing || aiBusy) return;
+    saving = true;
+    error = "";
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    const snapshot = $state.snapshot(draft) as Draft;
+    const version = editVersion;
     try {
-      await api.updateDraft(snapshot);
-      await api.saveServerDraft(snapshot);
-      dirty = false;
+      await persist(true);
       committed = true;
-      saveState = "saved";
+      if (editVersion === version) { dirty = false; saveState = "saved"; }
     } catch (e) {
       error = errorMessage(e);
-    }
+    } finally { saving = false; }
   }
 
-  function onWindowKeydown(e: KeyboardEvent) {
-    // Ctrl/Cmd+S saves the compose window's draft. `e.code` so it works on any
-    // keyboard layout. Only the standalone window handles this (the inline
-    // editor lives under App.svelte's global shortcuts).
-    if (chrome && (e.ctrlKey || e.metaKey) && e.code === "KeyS") {
+  export function handleShortcut(e: KeyboardEvent) {
+    if (e.isComposing || e.repeat || !(e.ctrlKey || e.metaKey)) return;
+    if (e.code === "KeyS") {
       e.preventDefault();
+      e.stopPropagation();
       void save();
+    } else if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      void send();
     }
   }
 
-  async function close() {
-    settled = true;
-    if (chrome) {
-      // The window's ✕ saves nothing. Drop a never-saved local draft so it
-      // doesn't linger as an orphaned row; a saved one stays in Drafts.
-      if (!committed && draft) await api.deleteDraft(draft.id).catch(() => {});
-    } else {
-      // Inline: closing keeps the draft — flush edits back to the server.
-      await flushServer();
+  export async function close() {
+    if (sending || closing) return;
+    closing = true;
+    stopAi();
+    error = "";
+    if (!await flushServer()) { closing = false; return; }
+    if (draft && !dirty && !committed && draft.mode === "new" && !draft.originMessageId && !draft.to.trim() && !draft.cc.trim() && !draft.bcc.trim() && !draft.subject.trim() && !splitTail(draft.body)[0].trim() && !attachments.length) {
+      try { await saveQueue; await api.deleteDraft(draft.id); }
+      catch (e) { error = errorMessage(e); closing = false; return; }
     }
+    settled = true;
     onClose?.();
   }
 
-  // Teardown. Inline (switching draft rows / leaving the folder) still writes
-  // edits back to the Drafts folder; the window instead cleans up an unsaved
-  // local draft.
+  export async function popOut() {
+    if (!draft || sending || closing || aiBusy) return;
+    closing = true;
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    try {
+      await persist();
+      await api.openComposeWindow(draft.id);
+      settled = true;
+      onClose?.();
+    } catch (e) { error = errorMessage(e); closing = false; }
+  }
+
+  // A view change must preserve unsent work; only Send or Discard settles it.
   onDestroy(() => {
+    cancelAi?.();
+    slowStart.clear();
     if (settled) return;
     settled = true;
-    if (chrome) {
-      if (!committed && draft) void api.deleteDraft(draft.id).catch(() => {});
-    } else {
-      void flushServer();
-    }
+    void flushServer();
   });
 
   const title = $derived(draft?.subject || t("compose.new"));
 </script>
 
-<svelte:window onkeydown={onWindowKeydown} />
-
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions (Keyboard shortcuts are delegated from the compose fields.) -->
 <div
   class="compose-form"
   class:inline={!chrome}
   role="region"
+  aria-label={t("compose.editor")}
+  onkeydown={handleShortcut}
+  onfocusin={(e) => { if (e.target instanceof HTMLElement) lastFocus = e.target; }}
   ondragover={(e) => {
     e.preventDefault();
     dragActive = true;
@@ -530,6 +600,7 @@
   {/if}
 
   {#if draft}
+    <fieldset class="compose-content" disabled={sending || closing || changingFrom}>
     <div class="fields">
       {#if canPickFrom}
         <label class="field">
@@ -549,7 +620,7 @@
       {/if}
       <label class="field">
         <span class="microlabel">{t("compose.to")}</span>
-        <AddressInput bind:value={draft.to} onchange={scheduleSave} />
+        <AddressInput bind:this={toField} label={t("compose.to")} bind:value={draft.to} onchange={scheduleSave} />
         {#if !showCc}
           <button class="cc-toggle microlabel" onclick={() => (showCc = true)}>
             {t("compose.cc")}
@@ -559,11 +630,11 @@
       {#if showCc}
         <label class="field">
           <span class="microlabel">{t("compose.cc")}</span>
-          <AddressInput bind:value={draft.cc} onchange={scheduleSave} />
+          <AddressInput label={t("compose.cc")} bind:value={draft.cc} onchange={scheduleSave} />
         </label>
         <label class="field">
           <span class="microlabel">{t("compose.bcc")}</span>
-          <AddressInput bind:value={draft.bcc} onchange={scheduleSave} />
+          <AddressInput label={t("compose.bcc")} bind:value={draft.bcc} onchange={scheduleSave} />
         </label>
       {/if}
     </div>
@@ -613,8 +684,9 @@
             spellcheck="false"
             disabled={aiBusy}
             onkeydown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.isComposing) {
                 e.preventDefault();
+                e.stopPropagation();
                 sendInstruction(instruction, true);
               }
             }}
@@ -624,7 +696,7 @@
           {:else}
             <button type="submit" class="ai-chip solid" disabled={!instruction.trim()}>
               <span class="label">✦ {hasDraft ? t("ai.refine") : t("ai.generate")}</span>
-              <kbd>Ctrl ↵</kbd>
+              <kbd>↵</kbd>
             </button>
           {/if}
         </form>
@@ -652,13 +724,22 @@
       </label>
     </div>
 
+    <div class="editor">
     <textarea
       class="body"
-      bind:value={draft.body}
-      oninput={scheduleSave}
+      bind:this={bodyEl}
+      aria-label={t("compose.body")}
+      value={bodyParts.text}
+      oninput={(e) => { draft!.body = e.currentTarget.value + bodyParts.quote; scheduleSave(); }}
       placeholder={t("compose.body_placeholder")}
       spellcheck="true"
+      disabled={aiBusy}
     ></textarea>
+    {#if bodyParts.quote && expanded}
+      <button class="quote-toggle" aria-label={t(quoteExpanded ? "compose.hide_quote" : "compose.show_quote")} title={t(quoteExpanded ? "compose.hide_quote" : "compose.show_quote")} aria-expanded={quoteExpanded} aria-controls={`compose-quote-${draft.id}`} onclick={() => quoteExpanded = !quoteExpanded}>···</button>
+      {#if quoteExpanded}<pre class="quoted-history" id={`compose-quote-${draft.id}`}>{bodyParts.quote.replace(/^\s*\n/,"")}</pre>{/if}
+    {/if}
+    </div>
 
     {#if attachments.length > 0}
       <div class="attach-row">
@@ -676,36 +757,33 @@
     {/if}
 
     {#if error}
-      <div class="error">{error}</div>
+      <div class="error" role="alert">{error}</div>
     {/if}
 
     <footer class="bar">
-      <button class="send" onclick={send} disabled={sending || !draft.to.trim()}>
+      <button class="send" onclick={send} disabled={sending || aiBusy || !draft.to.trim()} title={`${t("compose.send")} (Ctrl+Enter)`}>
         {sending ? t("compose.sending") : t("compose.send")}
+        <kbd>Ctrl ↵</kbd>
       </button>
       <button class="attach" onclick={() => fileInput?.click()} title={t("compose.attach")} aria-label={t("compose.attach")}>
         <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M12.5 7.5l-5 5a3 3 0 0 1-4.243-4.243l5.657-5.657a2 2 0 0 1 2.829 2.829l-5.657 5.657a1 1 0 0 1-1.415-1.415l4.95-4.95" /></svg>
       </button>
       <input bind:this={fileInput} type="file" multiple class="file-input" onchange={pickFiles} />
       <div class="grow"></div>
-      {#if chrome}
-        <!-- The window has no discard: closing already drops an unsaved draft.
-             Instead, editing reveals an explicit Save; a saved draft shows a
-             confirmation until the next edit. -->
+        <!-- Autosave is local; explicit Save commits the draft to the mailbox. -->
         {#if saveState === "dirty"}
-          <button class="save" onclick={save} title={t("compose.save")}>
+          <button class="save" onclick={save} title={t("compose.save")} aria-label={t("compose.save")} disabled={saving || aiBusy}>
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 8.5l3.5 3.5L13 4.5" /></svg>
             <kbd>Ctrl S</kbd>
           </button>
         {:else if saveState === "saved"}
           <span class="saved-label">{t("compose.saved")}</span>
         {/if}
-      {:else}
         <button class="discard" onclick={discard} title={t("compose.discard")}>
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.5 9.5h6l.5-9.5M6.7 6.5v5M9.3 6.5v5" /></svg>
         </button>
-      {/if}
     </footer>
+    </fieldset>
   {/if}
 
   {#if dragActive}
@@ -722,7 +800,17 @@
     flex-direction: column;
     background: var(--surface);
     position: relative;
+    min-height:0;
+    min-width:0;
   }
+  .compose-content { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; border:0; }
+  .editor { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; }
+  .quote-toggle { align-self:flex-start; flex-shrink:0; margin:0 20px 12px; padding:0 7px 3px; height:20px; line-height:16px; border-radius:5px; font-size:15px; letter-spacing:1px; color:var(--text-dim); background:var(--hover); }
+  .quote-toggle:hover { color:var(--text); background:var(--selected); }
+  .quoted-history { flex-shrink:0; padding:0 20px 20px; font:inherit; font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--text-faint); user-select:text; }
+  .fields, .ai-bar, .attach-row, .bar { flex-shrink:0; }
+  .field:focus-within { box-shadow:inset 0 -1px var(--accent); }
+  .field:focus-within > .microlabel { color:var(--accent); }
   /* Inline in the reading pane: grow to fill the third pane. */
   .compose-form.inline {
     flex: 1;
@@ -772,6 +860,7 @@
 
   .body {
     flex: 1;
+    min-height:120px;
     resize: none;
     padding: 16px 20px;
     font-size: 14px;
@@ -897,7 +986,7 @@
     background: var(--accent);
     color: var(--on-accent);
     border-color: var(--accent);
-    /* Stack the label over the Ctrl+Enter shortcut hint, centered. */
+    /* Stack the label over the Enter shortcut hint, centered. */
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -905,7 +994,7 @@
     line-height: 1.15;
   }
   /* Quiet shortcut caption under the label. Deliberately NOT the mono keycap
-     treatment here: the UI font keeps the "Ctrl ↵" gap tight and optically
+     treatment here: the UI font keeps the Enter hint tight and optically
      centered, and small + faded so it hints without pulling focus from the
      label. (A bare <kbd> otherwise defaults to the UA monospace font.) */
   .ai-chip.solid kbd {
@@ -943,6 +1032,9 @@
     border-top: 1px solid var(--hairline);
   }
   .send {
+    display:flex;
+    align-items:center;
+    gap:12px;
     padding: 8px 22px;
     border-radius: var(--radius-m);
     background: var(--text);
@@ -957,6 +1049,7 @@
     opacity: 0.45;
     cursor: default;
   }
+  .send kbd { font-family:var(--font-mono); font-size:10px; font-weight:400; opacity:.6; }
   .grow {
     flex: 1;
   }

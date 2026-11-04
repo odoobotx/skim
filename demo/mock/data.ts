@@ -519,10 +519,10 @@ export function replyTemplate(messageId: number, mode: string) {
     accountId: "acc-1",
     replyToMessageId: messageId,
     mode,
-    to: t ? `${t.fromName} <${t.fromAddr}>` : "Anna Weber <anna.weber@northwind.example>",
+    to: mode === "forward" ? "" : t ? `${t.fromName} <${t.fromAddr}>` : "Anna Weber <anna.weber@northwind.example>",
     cc: "",
     bcc: "",
-    subject: (t?.subject ?? "").startsWith("Re:") ? t!.subject : `Re: ${t?.subject ?? "Q3 launch"}`,
+    subject: mode === "forward" ? `Fwd: ${t?.subject ?? "Q3 launch"}` : (t?.subject ?? "").startsWith("Re:") ? t!.subject : `Re: ${t?.subject ?? "Q3 launch"}`,
     body: sigBlock() + quoted,
     originMessageId: null,
   };

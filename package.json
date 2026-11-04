@@ -1,6 +1,6 @@
 {
   "name": "skim",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "A fast, minimalist, AI-native email client for Windows",
   "license": "MIT",
   "homepage": "https://skim-tech.com",
@@ -26,6 +26,7 @@
     "docs:build": "node scripts/build-site.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:inbox-ui": "node tests/inbox-ui.mjs",
+    "test:compose-ui": "node tests/compose-ui.mjs",
     "test:rendering": "node tests/rendering-ui.mjs"
   },
   "dependencies": {

@@ -11,7 +11,7 @@
 
   async function compose() {
     const draft = await api.createDraft(await mail.composeAccountId());
-    await api.openComposeWindow(draft.id);
+    ui.openComposer(draft);
   }
 
   // "Отправленные" и "Черновики" содержат письма, написанные самим

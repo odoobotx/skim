@@ -3,6 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, reportError } from "../api";
 import { t } from "../i18n/index.svelte";
+import { isPriority, type SenderRules } from "../inbox";
 import { ui } from "./ui.svelte";
 import type { Account, Folder, SyncState, ThreadRow } from "../types";
 
@@ -28,6 +29,8 @@ const state = $state({
   inboxUnreadByAccount: {} as Record<string, number>,
   readingLayouts: {} as Record<string, "full" | "split">,
   emailAppearances: {} as Record<string, "theme" | "original">,
+  senderRules: {} as SenderRules,
+  priorityPending: [] as number[],
   syncState: "idle" as SyncState,
   syncMessage: null as string | null,
   syncProgress: null as { done: number; total: number } | null,
@@ -498,7 +501,16 @@ async function setGroupThreads(on: boolean) {
   }
 }
 
+let inboxVisitQueue = Promise.resolve();
+
 export const mail = {
+  acknowledgeInbox(accountId: string | null) {
+    inboxVisitQueue = inboxVisitQueue.catch(() => {}).then(() => api.acknowledgeInbox(accountId));
+    return inboxVisitQueue;
+  },
+  newUnread(accountId: string | null) {
+    return inboxVisitQueue.catch(() => {}).then(() => api.listRecentUnread(accountId));
+  },
   get booted() {
     return state.booted;
   },
@@ -588,11 +600,17 @@ export const mail = {
   },
   async setPriority(row: ThreadRow, priority: boolean | null) {
     const key=rowKey(row);
+    if (state.priorityPending.includes(key)) return;
+    state.priorityPending = [...state.priorityPending,key];
     state.threads=state.threads.map(item=>rowKey(item)===key ? {...item,priorityOverride:priority,priorityAt:priority ? Date.now() : 0} : item);
-    try {await api.setTaskPriority(row,priority);}
+    try {await api.setTaskPriority(row,priority);await refreshThreads();}
     catch(error) {await refreshThreads();throw error;}
-    await refreshThreads();
+    finally {state.priorityPending=state.priorityPending.filter(item=>item!==key);}
   },
+  togglePriority(row: ThreadRow) { return this.setPriority(row,!isPriority(row,state.senderRules)); },
+  priorityPending(row: ThreadRow) { return state.priorityPending.includes(rowKey(row)); },
+  get senderRules() { return state.senderRules; },
+  set senderRules(value: SenderRules) { state.senderRules = value; },
   async setDone(row: ThreadRow, done: boolean) {
     await this.setDoneRows([row], done);
   },
@@ -648,7 +666,8 @@ export const mail = {
   clearSelection,
 
   get selectedThread() {
-    return state.threads.find((t) => t.id === state.selectedThreadId) ?? null;
+    return state.threads.find(t => t.id === state.selectedThreadId &&
+      (state.groupThreads || state.selectedMessageId === null || t.messageId === state.selectedMessageId)) ?? null;
   },
   get syncState() {
     return state.syncState;

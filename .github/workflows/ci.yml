@@ -41,6 +41,9 @@ jobs:
       - name: Inbox interaction tests (synthetic mail)
         run: npm run test:inbox-ui
 
+      - name: Compose interaction tests (synthetic mail)
+        run: npm run test:compose-ui
+
       - name: Build frontend
         run: npm run build
 

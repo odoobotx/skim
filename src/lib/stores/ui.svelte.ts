@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { Lightness, Temperature, Theme } from "../types";
+import type { Draft, Lightness, Temperature, Theme } from "../types";
 
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -41,6 +41,10 @@ const state = $state({
   movePicker: null as MoveRequest | null,
   /** Open rename/delete dialog, and the folder it acts on. */
   folderEditor: null as FolderEdit | null,
+  composeDrafts: [] as { id: number; title: string }[],
+  activeComposeId: null as number | null,
+  composeExpanded: false,
+  composeMinimized: false,
 });
 
 /** Parse a persisted theme string into the two axes, migrating legacy values.
@@ -82,6 +86,26 @@ function applyTheme() {
 applyTheme();
 
 export const ui = {
+  get composeDrafts() { return state.composeDrafts; },
+  get activeComposeId() { return state.activeComposeId; },
+  get composeExpanded() { return state.composeExpanded; },
+  get composeMinimized() { return state.composeMinimized; },
+  openComposer(draft: Pick<Draft, "id" | "subject">) {
+    if (!state.composeDrafts.some(item => item.id === draft.id)) state.composeDrafts.push({ id: draft.id, title: draft.subject });
+    this.activateComposer(draft.id);
+  },
+  activateComposer(id: number) { state.activeComposeId = id; state.composeMinimized = false; },
+  updateComposer(draft: Draft) {
+    const item = state.composeDrafts.find(item => item.id === draft.id);
+    if (item) item.title = draft.subject;
+  },
+  closeComposer(id: number) {
+    state.composeDrafts = state.composeDrafts.filter(item => item.id !== id);
+    if (state.activeComposeId === id) state.activeComposeId = state.composeDrafts.at(-1)?.id ?? null;
+    if (!state.composeDrafts.length) { state.composeExpanded = false; state.composeMinimized = false; }
+  },
+  toggleComposeExpanded() { state.composeExpanded = !state.composeExpanded; state.composeMinimized = false; },
+  minimizeComposer() { state.composeMinimized = true; state.composeExpanded = false; },
   get homeOpen() { return state.homeOpen; },
   showHome() {
     state.homeOpen = true;

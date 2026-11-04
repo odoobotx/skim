@@ -32,6 +32,32 @@ current preview has reached it.
 
 ## Current preview
 
+- Home shows **New Unread Emails** since the last Inbox visit, with durable
+  per-account Inbox checkpoints. Entering a unified Inbox acknowledges all its
+  accounts; entering one account acknowledges only that mailbox. Returning
+  Home shows **No New Emails** without changing read flags. IMAP UIDs and
+  UIDVALIDITY distinguish new deliveries from older cache backfill and handle
+  server UID resets; the email's Date header is not the arrival checkpoint.
+- Sent-copy ownership defaults to the provider for Gmail and the supported Zoho
+  SMTP hosts (including custom accounts using smtppro.zoho.com). Skim resyncs
+  Sent instead of appending an extra copy. Other servers keep client-side
+  copying. Each account has an Automatic / provider / Skim override for servers
+  whose automatic saving has been disabled. The policy is shared by message
+  sends and calendar replies. Existing remote copies are preserved.
+  Reference: https://www.zoho.com/mail/help/zoho-smtp.html#Duplicate_Sent_Copies
+- The Inbox reader has a message Priority toggle beside Back/Done, with I as
+  its shortcut. It shares sender-rule inheritance, message exceptions and
+  pending-action protection with the list. Stars/Pinned remain independent.
+- Compose, Reply and Forward open a non-modal bottom-right composer. Mail lists
+  and readers remain usable behind it. Expand fills the app; minimize retains
+  the editor; pop-out remains optional. Multiple drafts keep their own mounted
+  editors and appear as tabs. Closing saves edited work; Discard is explicit.
+  New mail focuses/selects To; replies and forwards focus the start of the body.
+  Quoted originals are hidden without altering saved/sent text, with a small
+  three-dot reveal in the expanded/pop-out editor. Ctrl+Enter sends; Ctrl+S
+  saves. Autosave, explicit Save, Send and pop-out serialize local writes so a
+  slow save cannot overwrite newer text. Failed writes/sends keep the editor
+  available for retry. Browser automation uses synthetic mail only.
 - The Inbox timeline uses Today, Yesterday, This Week, Last Week, This Month,
   Last Month and Earlier. Priority stays above it. Each collapsed category or
   sender group appears once under its newest message's date, interleaved with
