@@ -231,6 +231,25 @@ try {
   await page.locator("nav.sidebar").getByRole("button", { name: /^Inbox/ }).click();
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
   await page.evaluate(()=>localStorage.setItem("skimdemo.longEmail","on"));
+  async function checkCopyMenu(layout) {
+    const iframe=page.locator(".reading-host iframe").first();
+    const paragraph=page.frameLocator(".reading-host iframe").first().locator("p,pre").filter({hasText:/\S/}).first();
+    await paragraph.waitFor();
+    await paragraph.evaluate(el=>{
+      const selection=el.ownerDocument.getSelection(),range=el.ownerDocument.createRange();
+      range.selectNodeContents(el);selection.removeAllRanges();selection.addRange(range);
+    });
+    await paragraph.click({button:"right",position:{x:5,y:8}});
+    const copy=page.getByRole("menuitem",{name:/^Copy/});
+    await copy.waitFor();
+    const box=await page.getByRole("menu",{name:"Copy",exact:true}).boundingBox(), frame=await iframe.boundingBox();
+    assert(box.x>=frame.x && box.x<=frame.x+80,`Copy menu stays near the selected text in ${layout}: ${JSON.stringify({box,frame})}`);
+    assert(box.x+box.width<=page.viewportSize().width && box.y+box.height<=page.viewportSize().height,"Copy stays on screen");
+    await page.screenshot({path:new URL(`../demo/output/copy-menu-${layout}.png`,import.meta.url).pathname.replace(/^\/(\w:)/,"$1")});
+    await copy.press("Escape");
+    await page.getByRole("menu",{name:"Copy",exact:true}).waitFor({state:"detached"});
+    assert(await iframe.isVisible(),"Closing Copy must not navigate out of the email");
+  }
   async function checkReadingScroll() {
     await page.waitForFunction(()=> {
       const el=document.querySelector(".reading-host .scroll");
@@ -263,6 +282,7 @@ try {
   assert(await page.locator(".reading-host").isVisible());
   await page.getByText("Browse messages",{exact:true}).waitFor();
   await list.locator("button.row").first().click();
+  await checkCopyMenu("split");
   await checkReadingScroll();
   await page.keyboard.press("Escape");
 
@@ -272,6 +292,7 @@ try {
   await list.getByRole("button", { name: /^Anna Weber/ }).click();
   await list.locator("button.row").first().click();
   await page.getByRole("button", {name:"Back to list",exact:true}).waitFor();
+  await checkCopyMenu("full");
   const readerToolbar=page.locator(".reading-host .toolbar");
   assert.equal(await readerToolbar.locator(".leading-actions").getByRole("button").count(),2,"Back and Done share the leading control");
   assert.equal(await readerToolbar.getByTitle("Archive",{exact:true}).count(),0,"Inbox reader offers Done instead of Archive");

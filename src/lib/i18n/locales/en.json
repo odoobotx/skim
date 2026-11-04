@@ -138,6 +138,8 @@
   "reading.copy_subject": "Copy subject",
   "reading.copy_address": "Copy address",
   "reading.copied": "Copied",
+  "reading.copy": "Copy",
+  "reading.copy_failed": "Couldn't copy. Try Ctrl+C.",
   "reading.show_all_recipients": "Show all recipients",
   "security.banner": "This message has signs of phishing",
   "security.reason.auth_dmarc_fail": "the sender's domain failed authentication (DMARC)",
