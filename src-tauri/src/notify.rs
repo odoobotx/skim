@@ -209,7 +209,7 @@ pub async fn notify_new_mail(app: &AppHandle, db: &Db, message_pks: &[i64]) {
     #[cfg(target_os = "linux")]
     {
         use tauri_plugin_notification::NotificationExt;
-        // ponytail: native notification only; Windows toast quick actions stay Windows-only.
+        // ponytail: informational Linux notifications; add native action callbacks if needed.
         let _ = (locale, open_target);
         if let Some(email) = account_email {
             body.push_str(&format!("\n{email}"));

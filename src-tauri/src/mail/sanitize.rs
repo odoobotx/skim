@@ -508,7 +508,7 @@ mod tests {
     fn rewrites_cid_references() {
         let s = sanitize_email_html("<img src=\"cid:logo@corp\">", 42, false);
         assert_eq!(s.blocked_images, 0);
-        assert!(s.html.contains("http://skim-cid.localhost/42/logo%40corp"));
+        assert!(s.html.contains(&cid_url(42, "logo@corp")));
     }
 
     #[test]
