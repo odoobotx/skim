@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../src/lib/inbox.ts", import.meta.url), "ut
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 });
-const { groupInbox, senderGroups, inboxSection, parseSenderRules, isPriority } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { groupInbox, senderGroups, inboxSection, parseSenderRules, isPriority, inboxTimeline } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 const row = (id, fromName, fromAddr, extra = {}) => ({
   id, accountId: "work", fromName, fromAddr, subject: `Subject ${id}`,
   snippet: "", date: 100 - id, isRead: false, isStarred: false,
@@ -76,4 +76,49 @@ test("Priority sender rules are inherited and individual messages can opt out or
   assert(!isPriority(row(2,"Person","person@example.com",{priorityOverride:false}),rules));
   assert(isPriority(row(2,"Person","person@example.com",{priorityOverride:null}),rules));
   assert(!isPriority(row(3,"Person","person@example.com",{isDone:true}),rules));
+});
+
+const dated = (id, month, day, extra = {}) => row(id, `Sender ${id}`, `sender${id}@example.com`, {
+  date: new Date(2026, month - 1, day, 12).getTime() / 1000, ...extra,
+});
+
+test("timeline sorts calendar sections and keeps mixed groups once at their newest date", () => {
+  const rows = [dated(1,9,2), dated(2,11,5), dated(3,11,16,{fromAddr:"anna@example.com"}),
+    dated(4,10,12,{category:"notifications"}), dated(5,11,18,{category:"notifications"}),
+    dated(6,11,17,{category:"newsletters"}), dated(7,10,15,{category:"newsletters"}),
+    dated(8,10,11,{fromAddr:"anna@example.com"}), dated(9,11,10), dated(10,10,12),
+    dated(11,11,18,{priorityOverride:true})];
+  const before = [...rows];
+  const result = inboxTimeline(rows, {"anna@example.com":{group:true}}, new Date(2026,10,18,18));
+  assert.deepEqual(result.sections.map(section => section.key),
+    ["today","yesterday","this_week","last_week","this_month","last_month","earlier"]);
+  assert.deepEqual(result.sections.slice(0,3).map(section => section.groups.map(g => g.rows.map(r => r.id))),
+    [[[5,4]],[[6,7]],[[3,8]]]);
+  assert.deepEqual(result.sections[0].groups.map(g => g.kind), ["notifications"]);
+  assert.equal(result.total,7);
+  assert.deepEqual(rows,before,"Timeline must not mutate the store's row order");
+  const sectionDoneIds = result.sections[0].groups.flatMap(g => g.rows.map(r => r.id));
+  assert.deepEqual(sectionDoneIds,[5,4],"Section Done includes older members of the visible collapsed group");
+  assert.equal(new Set(result.sections.flatMap(s => s.groups.flatMap(g => g.rows.map(r => r.id)))).size,10);
+  const limited = inboxTimeline(rows, {"anna@example.com":{group:true}},new Date(2026,10,18,18),2);
+  assert.equal(limited.total,7);
+  assert.deepEqual(limited.sections.flatMap(s => s.groups.map(g => g.rows.length)),[2,2],"Paging limits cards, never cuts a collapsed group in half");
+});
+
+test("Today, Yesterday and weeks use local dates at DST, month and year boundaries", () => {
+  const previousTZ = process.env.TZ;
+  process.env.TZ = "America/Chicago";
+  try {
+    const rows = [dated(1,11,2),dated(2,11,1,{date:new Date(2026,10,1,0,15).getTime()/1000}),dated(3,10,31)];
+    const result=inboxTimeline(rows,{},new Date(2026,10,2,0,30));
+    assert.deepEqual(result.sections.map(s=>s.key),["today","yesterday","last_week"]);
+    const yearRows = [row(1,"A","a@example.com",{date:new Date(2027,0,4,0,5).getTime()/1000}),
+      row(2,"B","b@example.com",{date:new Date(2027,0,3,23,59).getTime()/1000}),
+      row(3,"C","c@example.com",{date:new Date(2026,11,31,23,59).getTime()/1000}),
+      row(4,"D","d@example.com",{date:new Date(2026,11,1).getTime()/1000})];
+    assert.deepEqual(inboxTimeline(yearRows,{},new Date(2027,0,4,12)).sections.map(s=>s.key),
+      ["today","yesterday","last_week","last_month"]);
+  } finally {
+    if(previousTZ === undefined) delete process.env.TZ; else process.env.TZ=previousTZ;
+  }
 });

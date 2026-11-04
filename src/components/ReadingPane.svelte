@@ -377,10 +377,20 @@
   // true while the pane is shown.
   const anyStarred = $derived(mail.selectedThread?.isStarred ?? false);
   const isRead = $derived(mail.selectedThread?.isRead ?? true);
+  const inInbox = $derived(mail.selectedFolder?.role === "inbox");
+  const doneLabel = $derived(t(mail.selectedThread?.isDone ? "inbox.mark_undone" : "inbox.mark_done"));
+  let completing = $state(false);
+
+  function backToList() {
+    mail.selectedThreadId = null;
+    mail.selectedMessageId = null;
+    ui.closeRecap();
+  }
 
   function archive() {
-    if (!detail) return;
-    if (mail.selectedFolder?.role === "inbox") {
+    if (!detail || completing) return;
+    if (inInbox) {
+      completing = true;
       const row = mail.selectedThread;
       // Home/search can open a thread outside the currently paged list.
       const completion = row ? mail.setDone(row, !row.isDone)
@@ -392,7 +402,7 @@
       void completion.catch(error => {
         reportError("inbox.done", error);
         mail.noteError(t("ops.failed"));
-      });
+      }).finally(() => { completing = false; });
       return;
     }
     const threadId = detail.id;
@@ -467,8 +477,15 @@
   }
 </script>
 
+{#snippet backControl()}
+  <button class="tool back-control" onclick={backToList} aria-label={t("reading.back_to_list")} title={`${t("reading.back_to_list")} (Esc)`}>
+    <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 10H4m6-6-6 6 6 6" /></svg>
+  </button>
+{/snippet}
+
 <section class="pane">
   {#if !detail}
+    {#if mail.readingLayout === "full" && mail.selectedThreadId !== null}<header class="toolbar">{@render backControl()}</header>{/if}
     {#if ui.temperature === "warm" && mail.selectedThreadId === null}
       <!-- Quiet-zine empty state: a taped paper note. Warm themes only. -->
       <div class="placeholder">
@@ -508,14 +525,24 @@
     {/if}
   {:else}
     <header class="toolbar">
+      {#if inInbox || mail.readingLayout === "full"}
+        <div class="leading-actions">
+          {#if mail.readingLayout === "full"}{@render backControl()}{/if}
+          {#if inInbox}
+            <button class="tool done-action" onclick={archive} aria-label={doneLabel} title={`${doneLabel} (E)`} aria-pressed={mail.selectedThread?.isDone ?? false} disabled={completing}>
+              <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 10 3.5 3.5L15.5 6" /></svg>
+            </button>
+          {/if}
+        </div>
+      {/if}
       {#if mail.navigationRows.length > 1 && mail.navigationRows.some(row => row.id === mail.selectedThreadId)}
         <span class="browse-hint" title={`${t("shortcuts.next")} · ${t("shortcuts.prev")}`}><kbd>J</kbd><kbd>K</kbd><span>{t("reading.navigation_hint")}</span></span>
       {/if}
       <div class="spacer"></div>
-      <button class="tool" onclick={archive} title={t("reading.archive")}>
+      {#if !inInbox}<button class="tool" onclick={archive} title={t("reading.archive")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h12v3H2V3zm1 3v7h10V6M6.5 9h3" /></svg>
         <kbd>E</kbd>
-      </button>
+      </button>{/if}
       <button class="tool" onclick={remove} title={t("reading.delete")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.5 9.5h6l.5-9.5M6.7 6.5v5M9.3 6.5v5" /></svg>
         <kbd>Del</kbd>
@@ -943,8 +970,18 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 8px 20px 0;
+    padding: 12px 24px 8px;
+    flex-shrink: 0;
   }
+  .leading-actions { display:flex; align-items:center; gap:2px; padding:3px; margin-right:12px; border:1px solid var(--hairline); border-radius:24px; background:var(--hover); }
+  .leading-actions .tool { width:34px; height:32px; padding:0; justify-content:center; border-radius:50%; }
+  .tool.done-action { color:var(--accent); background:color-mix(in srgb,var(--accent) 10%,transparent); }
+  .tool.done-action:hover { color:var(--accent); background:color-mix(in srgb,var(--accent) 20%,transparent); }
+  .back-control { justify-content:center; }
+  .leading-actions + .browse-hint { margin-left:2px; }
+  .tool { transition:background 120ms,color 120ms; }
+  @media(max-width:1000px) { .toolbar .browse-hint span { display:none; } }
+  @media(prefers-reduced-motion:reduce) { .tool { transition:none; } }
   .spacer {
     flex: 1;
   }

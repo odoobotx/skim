@@ -21,6 +21,7 @@ try {
   }
   browser = await chromium.launch({ headless: true, executablePath: process.env.SKIM_TEST_BROWSER || undefined });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  await page.clock.setFixedTime(new Date("2026-11-18T18:00:00-06:00"));
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -49,6 +50,43 @@ try {
   await page.getByRole("button", { name: "Check Inbox" }).click();
   const list = page.locator("section.list");
   await list.getByRole("heading", { name: "Priority", exact: true }).waitFor();
+  await list.getByRole("heading", { name: "Today", exact: true }).waitFor();
+  await list.getByRole("heading", { name: "Yesterday", exact: true }).waitFor();
+  const notificationGroup=list.locator(".date-section").filter({has:page.getByRole("button",{name:/^Notifications/})});
+  assert.equal(await notificationGroup.count(),1,"A category appears once, in its newest message's date section");
+  await notificationGroup.getByRole("heading",{name:"Today",exact:true}).waitFor();
+  assert.equal(await list.getByRole("heading",{name:"People",exact:true}).count(),0,"Dates replace the separate People/bottom-category layout");
+  async function checkUnreadAlignment() {
+    const geometry=await list.locator(".row-wrap").evaluateAll(rows=>rows.map(el=>{
+      const rect=el.getBoundingClientRect();
+      return {unread:el.classList.contains("unread"), avatar:el.querySelector(".sender-avatar").getBoundingClientRect().left-rect.left};
+    }));
+    assert(geometry.some(r=>r.unread) && geometry.some(r=>!r.unread),"Alignment check needs read and unread examples");
+    assert(geometry.every(r=>Math.abs(r.avatar-42)<1),"Read and unread avatars must share a fixed gutter");
+    const markerCenters=await list.locator(".row-wrap.unread").evaluateAll(rows=>rows.map(el=>{
+      const avatar=el.querySelector(".sender-avatar").getBoundingClientRect(), dot=el.querySelector(".unread-dot").getBoundingClientRect();
+      return Math.abs(avatar.y+avatar.height/2-dot.y-dot.height/2);
+    }));
+    assert(markerCenters.every(delta=>delta<1),"Unread markers align with avatars in full and split layouts");
+    if(await list.evaluate(el=>el.classList.contains("wide"))) {
+      const columns=await list.locator(".date-section .row-wrap, .date-section .group-row").evaluateAll(rows=>rows.map(el=>{
+        const row=el.getBoundingClientRect();return el.querySelector(".subject,.preview").getBoundingClientRect().x-row.x;
+      }));
+      assert(Math.max(...columns)-Math.min(...columns)<1,`Group previews and message subjects share one column: ${JSON.stringify(columns)}`);
+    }
+  }
+  await checkUnreadAlignment();
+  await page.setViewportSize({width:1155,height:956});
+  await checkUnreadAlignment();
+  await page.setViewportSize({width:960,height:900});
+  await checkUnreadAlignment();
+  await page.setViewportSize({width:1440,height:1000});
+  const unreadRow=list.locator(".row-wrap.unread").first();
+  const avatarBefore=await unreadRow.locator(".sender-avatar").boundingBox();
+  await unreadRow.hover();
+  const avatarAfter=await unreadRow.locator(".sender-avatar").boundingBox();
+  assert.deepEqual(avatarAfter,avatarBefore,"Revealing Done must not move the sender");
+  await page.waitForFunction(()=>getComputedStyle(document.querySelector(".row-wrap.unread:hover .unread-dot")).opacity==="0");
   assert.equal(await page.getByText("Browse messages",{exact:true}).count(),0,"Full-width cards have no reading-navigation hint");
   await page.locator("nav.sidebar").getByRole("button", { name: "More", exact: true }).waitFor();
   assert.equal(await page.locator("nav.sidebar").getByRole("button", { name: /^Archive/ }).count(), 0);
@@ -211,6 +249,7 @@ try {
   await page.getByLabel("All inboxes reading layout",{exact:true}).selectOption("split");
   await page.locator(".overlay .close").click();
   assert(await page.locator(".list-host.split").isVisible());
+  await checkUnreadAlignment();
   assert(await page.locator(".reading-host").isVisible());
   await page.getByText("Browse messages",{exact:true}).waitFor();
   await list.locator("button.row").first().click();
@@ -222,7 +261,11 @@ try {
   await page.locator(".overlay .close").click();
   await list.getByRole("button", { name: /^Anna Weber/ }).click();
   await list.locator("button.row").first().click();
-  await page.getByRole("button", {name:"← Back to list",exact:true}).waitFor();
+  await page.getByRole("button", {name:"Back to list",exact:true}).waitFor();
+  const readerToolbar=page.locator(".reading-host .toolbar");
+  assert.equal(await readerToolbar.locator(".leading-actions").getByRole("button").count(),2,"Back and Done share the leading control");
+  assert.equal(await readerToolbar.getByTitle("Archive",{exact:true}).count(),0,"Inbox reader offers Done instead of Archive");
+  await readerToolbar.getByRole("button",{name:"Mark Undone",exact:true}).waitFor();
   assert(!(await page.locator(".list-host").isVisible()), "Full-width email replaces the list");
   await page.locator(".reading-host .toolbar").getByText("Browse messages",{exact:true}).waitFor();
   assert((await page.locator(".conversation-card").count())>=5,"The conversation is visible as cards without earlier/later accordions");
@@ -255,7 +298,7 @@ try {
     return body && getComputedStyle(body).backgroundColor === "rgb(255, 255, 255)";
   });
 
-  await page.getByRole("button", {name:"← Back to list",exact:true}).click();
+  await page.getByRole("button", {name:"Back to list",exact:true}).click();
   assert.equal(await list.locator("button.row").count(),2,"Back preserves the sender drill-down");
   await list.getByRole("button", {name:/Back to senders/}).click();
   await page.reload();
@@ -270,7 +313,30 @@ try {
     const body=document.querySelector("iframe")?.contentDocument?.body;
     return body && getComputedStyle(body).backgroundColor!=="rgb(255, 255, 255)";
   });
-  await page.getByRole("button",{name:"← Back to list",exact:true}).click();
+  await page.getByRole("button",{name:"Back to list",exact:true}).click();
+
+  // Reader Done and E use the same read-and-archive operation, even with Show Done on.
+  const city=list.locator(".message-wrap").filter({hasText:"City Utilities"});
+  await city.locator("button.row").click();
+  await readerToolbar.getByRole("button",{name:"Mark Done",exact:true}).click();
+  await list.waitFor({state:"visible"});
+  await page.waitForFunction(async()=>{const {mail}=await import("/src/lib/stores/mail.svelte.ts");const row=mail.threads.find(r=>r.id===202);return row?.isDone && row.isRead;});
+  await city.locator("button.row").click();
+  await readerToolbar.getByRole("button",{name:"Mark Undone",exact:true}).click();
+  await readerToolbar.getByRole("button",{name:"Mark Done",exact:true}).waitFor();
+  await page.keyboard.press("e");
+  await list.waitFor({state:"visible"});
+  await page.waitForFunction(async()=>{const {mail}=await import("/src/lib/stores/mail.svelte.ts");return mail.threads.find(r=>r.id===202)?.isDone;});
+
+  // A date-heading action completes all represented mail in one batch.
+  const earlier=list.locator(".date-section").filter({has:page.getByRole("heading",{name:"Earlier",exact:true})});
+  const sectionIds=(await earlier.locator(".date-heading [data-done-ids]").getAttribute("data-done-ids")).split(",").map(Number);
+  await earlier.locator(".date-heading [data-done-ids]").focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(ids=>ids.every(id=>JSON.parse(localStorage.getItem("skimdemo.done")||"[]").includes(id)),sectionIds);
+  const dateBatch=await page.evaluate(async()=>(await import("/demo/mock/tauri-core.ts")).commandLog.filter(c=>c.cmd==="set_tasks_done").at(-1));
+  assert.deepEqual(dateBatch.args.threadIds,sectionIds);
+  assert.equal(dateBatch.args.done,true);
 
   await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });
   await page.screenshot({ path: new URL("../demo/output/task-inbox.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true });
@@ -317,7 +383,7 @@ try {
     return mail.threads.length > 0 && mail.threads.every(row=>row.isDone && row.isRead) && mail.selectedFolder.unreadCount === 0;
   });
   assert.deepEqual(errors, []);
-  console.log("Inbox UI passed: Home, minimal sidebar, sender drill-down, category completion, Show Done, restore, sweep batching, failure recovery, persisted priority, unified Sent.");
+  console.log("Inbox UI passed: unread alignment, mixed date sections, section/group Done, reader Back/Done and E, Home, sidebar, sender drill-down, Show Done, sweep batching, failure recovery, Priority and unified Sent.");
 } finally {
   await browser?.close();
   server.kill();

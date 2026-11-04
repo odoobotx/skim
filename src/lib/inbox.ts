@@ -79,3 +79,45 @@ export function inboxSection(row: ThreadRow, rules: SenderRules): "priority" | C
   const rule = Object.hasOwn(rules, senderAddress(row)) ? rules[senderAddress(row)] : undefined;
   return isPriority(row,rules) ? "priority" : rule?.category ?? row.category ?? "mail";
 }
+
+export interface TimelineGroup extends InboxGroup { kind: Category }
+export type InboxDate = "today" | "yesterday" | "this_week" | "last_week" | "this_month" | "last_month" | "earlier";
+export interface InboxDateSection { key: InboxDate; groups: TimelineGroup[] }
+
+/** A collapsed group lives once, at its newest message; Priority stays above the timeline. */
+export function inboxTimeline(rows: ThreadRow[], rules: SenderRules, now = new Date(), limit = Infinity): { sections: InboxDateSection[]; total: number } {
+  const ordinary: ThreadRow[] = [], notifications: ThreadRow[] = [], newsletters: ThreadRow[] = [];
+  for (const row of rows) {
+    const section = inboxSection(row, rules);
+    if (section === "mail") ordinary.push(row);
+    else if (section === "notifications") notifications.push(row);
+    else if (section === "newsletters") newsletters.push(row);
+  }
+  const sorted = (items: ThreadRow[]) => [...items].sort((a, b) => b.date - a.date);
+  const groups: TimelineGroup[] = senderGroups(sorted(ordinary), rules).map(group => ({ ...group, kind: "mail" }));
+  for (const [kind, items] of [["notifications", notifications], ["newsletters", newsletters]] as const) {
+    if (items.length) groups.push({ key: kind, label: kind, kind, rows: sorted(items) });
+  }
+  groups.sort((a, b) => b.rows[0].date - a.rows[0].date);
+
+  // Calendar arithmetic keeps midnight and week boundaries correct across DST.
+  const year = now.getFullYear(), month = now.getMonth(), day = now.getDate();
+  const monday = day - (now.getDay() + 6) % 7;
+  const boundaries: [InboxDate, number][] = [
+    ["today", new Date(year, month, day).getTime() / 1000],
+    ["yesterday", new Date(year, month, day - 1).getTime() / 1000],
+    ["this_week", new Date(year, month, monday).getTime() / 1000],
+    ["last_week", new Date(year, month, monday - 7).getTime() / 1000],
+    ["this_month", new Date(year, month, 1).getTime() / 1000],
+    ["last_month", new Date(year, month - 1, 1).getTime() / 1000],
+    ["earlier", -Infinity],
+  ];
+  const sections = new Map<InboxDate, InboxDateSection>();
+  for (const group of groups.slice(0, limit)) {
+    const key = boundaries.find(([, start]) => group.rows[0].date >= start)![0];
+    let section = sections.get(key);
+    if (!section) { section = { key, groups: [] }; sections.set(key, section); }
+    section.groups.push(group);
+  }
+  return { sections: [...sections.values()], total: groups.length };
+}

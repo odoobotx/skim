@@ -32,6 +32,17 @@ current preview has reached it.
 
 ## Current preview
 
+- The Inbox timeline uses Today, Yesterday, This Week, Last Week, This Month,
+  Last Month and Earlier. Priority stays above it. Each collapsed category or
+  sender group appears once under its newest message's date, interleaved with
+  ordinary messages. Hover/focus a date heading to complete its represented mail
+  in one batch, including older members inside its collapsed groups. Date
+  boundaries use local calendar time and refresh at midnight or app resume.
+- Read/unread rows and group summaries share a fixed leading gutter. Hover/focus
+  fades the unread dot into Done without shifting avatars or text. The reader
+  pairs an icon-only Back arrow with Done at the top left; E uses the same
+  read-and-archive operation. Completing a message returns to the list even
+  when Show Done is on. Back preserves category/sender drill-down context.
 - Attachment and calendar-file opening resolves the real on-disk path before
   handing it to another app. This handles Windows redirected AppData caches;
   download behavior and cached files remain unchanged. Open/save failures show
@@ -105,7 +116,9 @@ mail-server operations were performed against that account during development.
 
 ## Confirmed design direction
 
-- Default inbox sections: Priority, People, Notifications, Newsletters.
+- Priority stays at the top; date sections mix personal messages, Notifications,
+  Newsletters and opt-in sender groups in chronological order. A collapsed group
+  spans dates and appears once under its newest member, as the user chose.
 - Sidebar defaults: Inbox, Sent, Drafts. Other folders belong under More.
 - Done control appears on hover and keyboard focus; provide an accessible touch
   target rather than relying on hover alone.

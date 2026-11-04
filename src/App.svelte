@@ -485,8 +485,8 @@
         </div>
         {#if mail.selectedThreadId !== null || ui.recapOpen || mail.readingLayout === "split"}
         <div class="reading-host">
-        {#if mail.readingLayout === "full"}
-          <div class="reading-nav"><button onclick={() => { mail.selectedThreadId = null; mail.selectedMessageId = null; ui.closeRecap(); }}>← Back to list</button></div>
+        {#if mail.readingLayout === "full" && ((mail.selectedFolder?.role === "drafts" && draftEditorId !== null) || (ui.recapOpen && mail.selectedThreadId === null))}
+          <div class="reading-nav"><button aria-label={t("reading.back_to_list")} title={t("reading.back_to_list")} onclick={() => { mail.selectedThreadId = null; mail.selectedMessageId = null; ui.closeRecap(); }}><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 10H4m6-6-6 6 6 6" /></svg></button></div>
         {/if}
         {#if mail.selectedFolder?.role === "drafts" && draftEditorId !== null}
           {#key draftEditorId}
