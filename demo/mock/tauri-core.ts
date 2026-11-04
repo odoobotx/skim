@@ -292,7 +292,15 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "get_reply_template":
       return ok(db.replyTemplate(args.messageId, args.mode));
     case "update_draft":
+      if (localStorage.getItem("skimdemo.failDraftSave") === "on") return Promise.reject(new Error("Synthetic draft save failure"));
       db.updateDraft(args.draft);
+      return ok(undefined);
+    case "save_server_draft":
+      if (localStorage.getItem("skimdemo.failDraftSave") === "on") return Promise.reject(new Error("Synthetic draft save failure"));
+      db.updateDraft(args.draft);
+      return ok(undefined);
+    case "send_draft":
+      if (localStorage.getItem("skimdemo.failSend") === "on") return Promise.reject(new Error("Synthetic send failure"));
       return ok(undefined);
     case "list_draft_attachments":
       return ok([]);

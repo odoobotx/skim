@@ -39,10 +39,9 @@ try {
   assert.equal(await page.locator("nav.sidebar").count(), 0, "Home must be separate from inbox navigation");
   await page.getByRole("button", {name:"Search mail",exact:true}).waitFor();
   await page.getByRole("button", {name:"Compose",exact:true}).click();
-  await page.waitForFunction(async () => {
-    const { commandLog } = await import("/demo/mock/tauri-core.ts");
-    return commandLog.some(call => call.cmd === "open_compose_window");
-  });
+  await page.locator(".compose-dock").waitFor();
+  await page.getByRole("button",{name:"Close and save draft",exact:true}).click();
+  await page.locator(".compose-dock").waitFor({state:"hidden"});
   await page.locator(".mail-preview").first().waitFor();
   assert((await page.locator(".mail-preview").count()) <= 5);
   await mkdir(new URL("../demo/output/", import.meta.url), { recursive: true });

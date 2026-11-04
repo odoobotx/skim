@@ -32,6 +32,16 @@ current preview has reached it.
 
 ## Current preview
 
+- Compose, Reply and Forward open a non-modal bottom-right composer. Mail lists
+  and readers remain usable behind it. Expand fills the app; minimize retains
+  the editor; pop-out remains optional. Multiple drafts keep their own mounted
+  editors and appear as tabs. Closing saves edited work; Discard is explicit.
+  New mail focuses/selects To; replies and forwards focus the start of the body.
+  Quoted originals are hidden without altering saved/sent text, with a small
+  three-dot reveal in the expanded/pop-out editor. Ctrl+Enter sends; Ctrl+S
+  saves. Autosave, explicit Save, Send and pop-out serialize local writes so a
+  slow save cannot overwrite newer text. Failed writes/sends keep the editor
+  available for retry. Browser automation uses synthetic mail only.
 - The Inbox timeline uses Today, Yesterday, This Week, Last Week, This Month,
   Last Month and Earlier. Priority stays above it. Each collapsed category or
   sender group appears once under its newest message's date, interleaved with

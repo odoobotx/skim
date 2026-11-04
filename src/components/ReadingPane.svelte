@@ -473,7 +473,7 @@
     const target = replyTarget;
     if (!target) return;
     const draft = await api.getReplyTemplate(target.id, mode);
-    await api.openComposeWindow(draft.id);
+    ui.openComposer(draft);
   }
 </script>
 

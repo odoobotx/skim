@@ -6,6 +6,7 @@
   import ReadingPane from "./components/ReadingPane.svelte";
   import BackDone from "./components/BackDone.svelte";
   import ComposeForm from "./components/ComposeForm.svelte";
+  import ComposeDock from "./components/ComposeDock.svelte";
   import AiAsk from "./components/AiAsk.svelte";
   import AiRecap from "./components/AiRecap.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
@@ -125,6 +126,12 @@
         if (msgId == null) return;
         const draft = await api.editDraft(msgId);
         if (token !== draftResolveToken) return; // selection moved on
+        if (ui.composeDrafts.some(item => item.id === draft.id)) {
+          ui.activateComposer(draft.id);
+          mail.selectedThreadId = null;
+          mail.selectedMessageId = null;
+          return;
+        }
         draftOrigin = msgId;
         draftEditorId = draft.id;
       } catch {
@@ -299,12 +306,12 @@
     const detail = await api.getThread(thread.id);
     const latest = detail.messages[detail.messages.length - 1];
     const draft = await api.getReplyTemplate(latest.id, mode);
-    await api.openComposeWindow(draft.id);
+    ui.openComposer(draft);
   }
 
   async function composeNew() {
     const draft = await api.createDraft(await mail.composeAccountId());
-    await api.openComposeWindow(draft.id);
+    ui.openComposer(draft);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -325,6 +332,7 @@
       void composeNew();
       return;
     }
+    if (ui.composeExpanded || (e.target instanceof Element && e.target.closest(".compose-form, .compose-dock"))) return;
     // Ctrl+1 is "All inboxes", Ctrl+2..9 the Nth mailbox — matching the
     // switcher's order (only when several accounts exist).
     if ((e.ctrlKey || e.metaKey) && mail.accounts.length > 1 && /^Digit[1-9]$/.test(e.code)) {
@@ -538,6 +546,7 @@
         </div>
       {/if}
       <CommandPalette />
+      <ComposeDock />
       <FolderPicker />
       <FolderEditor />
       {#if ui.shortcutsOpen}

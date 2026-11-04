@@ -46,7 +46,7 @@
     composeError = false;
     try {
       const draft = await api.createDraft(await mail.composeAccountId());
-      await api.openComposeWindow(draft.id);
+      ui.openComposer(draft);
     } catch (error) {
       reportError("home.compose", error);
       composeError = true;
