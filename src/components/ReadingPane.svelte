@@ -8,6 +8,7 @@
   import type { MessageMeta, RenderedBody, ThreadDetail } from "../lib/types";
   import AiAsk from "./AiAsk.svelte";
   import AttachmentChips from "./AttachmentChips.svelte";
+  import BackDone from "./BackDone.svelte";
   import CopyAffordance from "./CopyAffordance.svelte";
   import HtmlViewer from "./HtmlViewer.svelte";
   import InviteCard from "./InviteCard.svelte";
@@ -377,10 +378,19 @@
   // true while the pane is shown.
   const anyStarred = $derived(mail.selectedThread?.isStarred ?? false);
   const isRead = $derived(mail.selectedThread?.isRead ?? true);
+  const inInbox = $derived(mail.selectedFolder?.role === "inbox");
+  let completing = $state(false);
+
+  function backToList() {
+    mail.selectedThreadId = null;
+    mail.selectedMessageId = null;
+    ui.closeRecap();
+  }
 
   function archive() {
-    if (!detail) return;
-    if (mail.selectedFolder?.role === "inbox") {
+    if (!detail || completing) return;
+    if (inInbox) {
+      completing = true;
       const row = mail.selectedThread;
       // Home/search can open a thread outside the currently paged list.
       const completion = row ? mail.setDone(row, !row.isDone)
@@ -392,7 +402,7 @@
       void completion.catch(error => {
         reportError("inbox.done", error);
         mail.noteError(t("ops.failed"));
-      });
+      }).finally(() => { completing = false; });
       return;
     }
     const threadId = detail.id;
@@ -469,6 +479,7 @@
 
 <section class="pane">
   {#if !detail}
+    {#if mail.readingLayout === "full" && mail.selectedThreadId !== null}<header class="toolbar"><BackDone onback={backToList} /></header>{/if}
     {#if ui.temperature === "warm" && mail.selectedThreadId === null}
       <!-- Quiet-zine empty state: a taped paper note. Warm themes only. -->
       <div class="placeholder">
@@ -508,14 +519,17 @@
     {/if}
   {:else}
     <header class="toolbar">
+      {#if inInbox || mail.readingLayout === "full"}
+        <BackDone onback={mail.readingLayout === "full" ? backToList : undefined} ondone={inInbox ? archive : undefined} done={mail.selectedThread?.isDone ?? false} disabled={completing} />
+      {/if}
       {#if mail.navigationRows.length > 1 && mail.navigationRows.some(row => row.id === mail.selectedThreadId)}
         <span class="browse-hint" title={`${t("shortcuts.next")} · ${t("shortcuts.prev")}`}><kbd>J</kbd><kbd>K</kbd><span>{t("reading.navigation_hint")}</span></span>
       {/if}
       <div class="spacer"></div>
-      <button class="tool" onclick={archive} title={t("reading.archive")}>
+      {#if !inInbox}<button class="tool" onclick={archive} title={t("reading.archive")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h12v3H2V3zm1 3v7h10V6M6.5 9h3" /></svg>
         <kbd>E</kbd>
-      </button>
+      </button>{/if}
       <button class="tool" onclick={remove} title={t("reading.delete")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.5 9.5h6l.5-9.5M6.7 6.5v5M9.3 6.5v5" /></svg>
         <kbd>Del</kbd>
@@ -943,8 +957,13 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 8px 20px 0;
+    padding: 12px 24px 8px;
+    flex-shrink: 0;
   }
+  .toolbar :global(.leading-actions) { margin-right:12px; }
+  .tool { transition:background 120ms,color 120ms; }
+  @media(max-width:1000px) { .toolbar .browse-hint span { display:none; } }
+  @media(prefers-reduced-motion:reduce) { .tool { transition:none; } }
   .spacer {
     flex: 1;
   }

@@ -75,14 +75,14 @@
     </svg>
   </button>
   <button class="row" onclick={() => onselect?.(thread.id)} {oncontextmenu}>
+    {#if !thread.isRead}<span class="unread-dot" aria-hidden="true"></span>{/if}
     <div class="line1">
       <span class="from">
-        {#if !thread.isRead}<span class="unread-dot"></span>{/if}
         <span class="sender-avatar" aria-hidden="true">{initials || "?"}</span>
         {#if badge}
           <span class="acct" title={badge.title} aria-label={badge.title} style:background="var(--acct-{badge.color})">{badge.letter}</span>
         {/if}
-        {thread.fromName}
+        <span class="sender-name">{thread.fromName}</span>
         {#if thread.messageCount > 1}<span class="mcount">{thread.messageCount}</span>{/if}
       </span>
       <span class="date">{formatDate(thread.date)}</span>
@@ -101,13 +101,14 @@
   .priority-check:hover { background:var(--hover); }
   .priority-check.active { color:var(--accent); }
   @media(hover:none) { .priority-check { opacity:1; } }
-  .sender-avatar { width:26px; height:26px; border-radius:50%; flex-shrink:0; display:grid; place-items:center; font-size:9px; font-weight:600; color:var(--text-dim); background:color-mix(in srgb,#749f9a 15%,var(--bg)); border:1px solid color-mix(in srgb,#749f9a 25%,transparent); }
-  .done-check { position:absolute; left:8px; top:50%; transform:translateY(-50%); z-index:2; width:26px; height:28px; border-radius:8px; opacity:0; color:var(--text-dim); touch-action:none; }
-  .row-wrap:hover .done-check, .done-check:focus-visible, .completed .done-check { opacity:1; }
-  .done-check:hover { background:color-mix(in srgb,#749f9a 20%,transparent); color:#749f9a; }
+  .sender-avatar { width:26px; height:26px; border-radius:50%; flex-shrink:0; display:grid; place-items:center; font-size:9px; font-weight:600; color:var(--text-dim); background:color-mix(in srgb,var(--accent) 10%,var(--bg)); border:1px solid color-mix(in srgb,var(--accent) 18%,transparent); }
+  .sender-name { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .done-check { position:absolute; left:8px; top:25px; transform:translateY(-50%); z-index:2; width:26px; height:28px; display:grid; place-items:center; border-radius:8px; opacity:0; color:var(--text-dim); touch-action:none; transition:opacity 120ms,background 120ms; }
+  .row-wrap:hover .done-check, .row-wrap:focus-within .done-check, .completed .done-check { opacity:1; }
+  .done-check:hover { background:color-mix(in srgb,var(--accent) 16%,transparent); color:var(--accent); }
+  .row-wrap:has(.done-check):is(:hover,:focus-within) .unread-dot { opacity:0; }
   .completed .row { opacity:.48; }
-  .row-wrap:has(.done-check) .row { padding-left:42px; }
-  @media(hover:none) { .done-check { opacity:1; } }
+  @media(hover:none) { .done-check { opacity:1; } .row-wrap:has(.done-check) .unread-dot { opacity:0; } }
   /* Only a positioning context for the checkbox: the row button below still
      draws the whole row, so its height and hairline are untouched. */
   .row-wrap {
@@ -118,9 +119,9 @@
     display: block;
     width: 100%;
     text-align: left;
-    padding: 12px 16px;
+    padding: 12px 16px 12px 42px;
     border-bottom: 1px solid var(--hairline);
-    transition: background 0.08s;
+    transition: background 120ms;
   }
   /* Hover lives on the wrapper: the checkbox sits outside the button, and
      pointing at it must not drop the row's tint. */
@@ -168,13 +169,6 @@
     color: var(--surface);
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .row,
-    .check {
-      transition: none;
-    }
-  }
-
   .line1 {
     display: flex;
     justify-content: space-between;
@@ -193,19 +187,26 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    font-weight: 500;
   }
   .unread .from {
     color: var(--text);
-    font-weight: 700;
+    font-weight: 600;
   }
   .unread-dot {
-    width: 7px;
-    height: 7px;
+    position: absolute;
+    left: 18px;
+    top: 25px;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
-    background: #4d9dd3;
-    flex-shrink: 0;
+    background: var(--accent);
+    transition: opacity 120ms;
+    pointer-events: none;
   }
   .mcount {
+    flex-shrink: 0;
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-faint);
@@ -258,6 +259,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row, .check, .done-check, .unread-dot { transition: none; }
   }
 
 </style>

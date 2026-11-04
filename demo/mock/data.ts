@@ -269,6 +269,10 @@ fixture(262,"Trail Notes","hello@trail-notes.example","A weekend outside — Oct
 fixture(263,"Community garden","garden@community.example","Saturday planting — quick update",D,"mail",true);
 fixture(264,"Home NAS","nas@home-storage.example","[Home NAS] Storage health report",D+H,"notifications",true);
 fixture(265,"Avery Lane","avery@friends.example","Photos from the coast",3*D,"mail",true);
+fixture(460,"Riley Shaw","riley@cedar.example","A few notes from last week's workshop",8*D);
+fixture(461,"Casey Park","casey@harbor.example","The project handover — everything in one place",18*D);
+fixture(462,"Finley Reed","finley@studio.example","October planning — decisions and next steps",45*D,"mail",true);
+fixture(463,"Robin Ellis","robin@client.example","Summer review — a useful conversation to keep",110*D);
 INBOX_THREADS.find(row => row.id === 452)!.isStarred=true;
 ACC2_INBOX_THREADS.find(row => row.id === 265)!.isStarred=true;
 

@@ -600,7 +600,7 @@ export const mail = {
     const keys = new Set(rows.map(rowKey));
     state.threads = state.threads.flatMap(row => keys.has(rowKey(row))
       ? done && !state.showDone ? [] : [{ ...row, isDone: done, isRead: done || row.isRead, priorityOverride: done ? null : row.priorityOverride, priorityAt: done ? 0 : row.priorityAt, pendingMove: true }] : [row]);
-    if (done && !state.showDone && rows.some(row => row.id === state.selectedThreadId)) {
+    if (done && rows.some(row => row.id === state.selectedThreadId)) {
       state.selectedThreadId = null;
       state.selectedMessageId = null;
     }

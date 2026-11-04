@@ -29,7 +29,7 @@
     {
       title: t("shortcuts.actions"),
       rows: [
-        { label: t("reading.archive"), keys: ["E"] },
+        { label: t(mail.selectedFolder?.role === "inbox" ? "inbox.mark_done" : "reading.archive"), keys: ["E"] },
         { label: t("reading.delete"), keys: ["Del"] },
         { label: t("reading.spam"), keys: ["!"] },
         { label: t("reading.move"), keys: ["V"] },
