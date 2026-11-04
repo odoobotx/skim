@@ -40,6 +40,7 @@ try {
   }
   browser = await chromium.launch({ headless: true, executablePath: process.env.SKIM_TEST_BROWSER || undefined });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   const errors = [];
   const external = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -87,6 +88,22 @@ try {
   assert(await frame.locator('div[style*="max-width:660px"]').first().evaluate(el => el.getBoundingClientRect().width <= 660.1));
   assert.equal(await frame.getByText("Hidden preheader").isVisible(), false);
   assert.equal(await frame.locator("body").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(255, 255, 255)");
+  const selected = await frame.getByText("Hello Example User,", {exact:true}).evaluate(el => {
+    const doc=el.ownerDocument, selection=doc.getSelection(), range=doc.createRange();
+    range.selectNodeContents(el);selection.removeAllRanges();selection.addRange(range);
+    const menu=new MouseEvent("contextmenu", {bubbles:true,cancelable:true});
+    el.dispatchEvent(menu);
+    return {text:selection.toString(),allowed:!menu.defaultPrevented};
+  });
+  assert.equal(selected.allowed,true,"Selected email text keeps its native Copy menu");
+  await page.locator("iframe").focus();
+  await page.keyboard.press("Control+c");
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),selected.text,"Ctrl+C copies the selected email text");
+  assert.equal(await frame.locator("body").evaluate(el=>{
+    el.ownerDocument.getSelection().removeAllRanges();
+    const menu=new MouseEvent("contextmenu", {bubbles:true,cancelable:true});
+    el.dispatchEvent(menu);return menu.defaultPrevented;
+  }),true,"Unselected message areas still suppress the browser menu");
   await mkdir(resolve(root, "demo/output"), { recursive: true });
   await page.screenshot({ path: resolve(root, "demo/output/rendering-original.png"), fullPage: true });
   await logo.click();

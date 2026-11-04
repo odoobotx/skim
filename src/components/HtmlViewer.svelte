@@ -210,9 +210,10 @@
       img.addEventListener("load", measure);
       img.addEventListener("error", measure);
     }
-    // The message body is never editable, so kill the WebView2 context menu
-    // here too — the parent document's handler can't reach into the iframe.
-    doc.addEventListener("contextmenu", (e) => e.preventDefault());
+    // The iframe owns its selection; keep the native Copy menu for selected text.
+    doc.addEventListener("contextmenu", (e) => {
+      if (!doc.getSelection()?.toString()) e.preventDefault();
+    });
     doc.addEventListener("click", (e) => {
       const target = (e.target as HTMLElement | null)?.closest("a");
       if (!target) {
