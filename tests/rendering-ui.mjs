@@ -40,6 +40,7 @@ try {
   }
   browser = await chromium.launch({ headless: true, executablePath: process.env.SKIM_TEST_BROWSER || undefined });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   const errors = [];
   const external = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -87,6 +88,44 @@ try {
   assert(await frame.locator('div[style*="max-width:660px"]').first().evaluate(el => el.getBoundingClientRect().width <= 660.1));
   assert.equal(await frame.getByText("Hidden preheader").isVisible(), false);
   assert.equal(await frame.locator("body").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(255, 255, 255)");
+  async function selectForCopy(target) {
+    return target.evaluate(el => {
+      const doc=el.ownerDocument, selection=doc.getSelection(), range=doc.createRange();
+      range.selectNodeContents(el);selection.removeAllRanges();selection.addRange(range);
+      const menu=new MouseEvent("contextmenu", {bubbles:true,cancelable:true});
+      el.dispatchEvent(menu);
+      return {text:selection.toString(),prevented:menu.defaultPrevented};
+    });
+  }
+  const greeting=frame.getByText("Hello Example User,", {exact:true});
+  const selected=await selectForCopy(greeting);
+  assert.equal(selected.prevented,true,"Native link actions cannot bypass the reader's safety controls");
+  const copy=page.getByRole("menuitem",{name:/^Copy/});
+  await copy.waitFor();
+  assert(await copy.evaluate(el=>el===document.activeElement),"Copy is immediately keyboard accessible");
+  await copy.click();
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),selected.text,"Right-click Copy writes selected email text");
+  await page.getByRole("menu").waitFor({state:"detached"});
+  await page.locator("iframe").focus();
+  await page.keyboard.press("Control+c");
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),selected.text,"Ctrl+C copies the selected email text");
+  await selectForCopy(greeting);
+  await copy.press("Escape");
+  await page.getByRole("menu").waitFor({state:"detached"});
+  assert(await page.locator("iframe").evaluate(el=>el===document.activeElement),"Escape returns focus to the message");
+  await selectForCopy(greeting);
+  await page.evaluate(()=>Object.defineProperty(navigator.clipboard,"writeText",{configurable:true,value:async()=>{throw Error("Clipboard unavailable");}}));
+  await copy.click();
+  await page.getByRole("alert").filter({hasText:"Couldn't copy"}).waitFor();
+  assert(await copy.isVisible(),"A failed copy stays available to retry");
+  await page.evaluate(()=>delete navigator.clipboard.writeText);
+  await copy.press("Enter");
+  await page.getByRole("menu").waitFor({state:"detached"});
+  assert.equal(await frame.locator("body").evaluate(el=>{
+    el.ownerDocument.getSelection().removeAllRanges();
+    const menu=new MouseEvent("contextmenu", {bubbles:true,cancelable:true});
+    el.dispatchEvent(menu);return menu.defaultPrevented;
+  }),true,"Unselected message areas still suppress the browser menu");
   await mkdir(resolve(root, "demo/output"), { recursive: true });
   await page.screenshot({ path: resolve(root, "demo/output/rendering-original.png"), fullPage: true });
   await logo.click();
@@ -120,6 +159,11 @@ try {
   await frame.getByText("Plain text follows the app theme.").waitFor();
   assert.equal(await page.getByRole("combobox").count(), 0);
   assert.notEqual(await frame.locator("body").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(255, 255, 255)");
+  await show('<p><a href="https://destination.example">Copy this linked text</a></p>');
+  const linked=await selectForCopy(frame.getByText("Copy this linked text",{exact:true}));
+  assert.equal(linked.prevented,true);
+  await copy.click();
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),linked.text,"Linked text copies without opening its destination");
   await page.evaluate(()=>window.setRenderingConversation(true));
   await show(sanitize('<p>My new reply.</p><div class="gmail_quote"><div class="gmail_attr">On Tuesday, Example wrote:</div><p>Repeated earlier message.</p></div>').html);
   await frame.getByText("My new reply.",{exact:true}).waitFor();

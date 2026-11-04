@@ -6,6 +6,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ui } from "../lib/stores/ui.svelte";
   import { t } from "../lib/i18n/index.svelte";
+  import { copyText } from "../lib/clipboard";
   import type { LinkFlag } from "../lib/types";
 
   let {
@@ -37,6 +38,47 @@
   // the real host and the reason; nothing opens until "Open anyway".
   let gate = $state<{ flag: LinkFlag; x: number; y: number } | null>(null);
   let gateEl: HTMLDivElement | undefined = $state();
+  let selectionMenu = $state<{text:string;x:number;y:number} | null>(null);
+  let copyButton: HTMLButtonElement | undefined = $state();
+  let copyFailed = $state(false);
+  // Reading-pane containment must not offset or clip the viewport-positioned menu.
+  function atWindowRoot(node:HTMLElement) {
+    document.body.append(node);
+    return {destroy:() => node.remove()};
+  }
+  function closeSelectionMenu() { selectionMenu=null;iframe?.focus(); }
+  async function copySelection() {
+    const menu=selectionMenu;
+    if (!menu) return;
+    const copied=await copyText(menu.text);
+    if (selectionMenu !== menu) return;
+    if (copied) closeSelectionMenu();
+    else copyFailed=true;
+  }
+  function selectionMenuKey(event:KeyboardEvent) {
+    event.stopPropagation();
+    if (event.key === "Escape" || event.key === "Tab") {event.preventDefault();closeSelectionMenu();}
+    else if ((event.ctrlKey || event.metaKey) && event.code === "KeyC") {event.preventDefault();void copySelection();}
+    else if (["ArrowUp","ArrowDown","Home","End"].includes(event.key)) event.preventDefault();
+  }
+  $effect(() => {
+    if (!selectionMenu) return;
+    copyButton?.focus();
+    const dismiss=() => selectionMenu=null;
+    const doc=iframe?.contentDocument;
+    window.addEventListener("pointerdown",dismiss);
+    window.addEventListener("scroll",dismiss,true);
+    window.addEventListener("blur",dismiss);
+    doc?.addEventListener("pointerdown",dismiss);
+    doc?.addEventListener("scroll",dismiss,true);
+    return () => {
+      window.removeEventListener("pointerdown",dismiss);
+      window.removeEventListener("scroll",dismiss,true);
+      window.removeEventListener("blur",dismiss);
+      doc?.removeEventListener("pointerdown",dismiss);
+      doc?.removeEventListener("scroll",dismiss,true);
+    };
+  });
 
   $effect(() => {
     if (!gate) return;
@@ -123,6 +165,7 @@
   const srcdoc = $derived(
     buildEmailDocument(revealQuotes ? html : reply.html, ui.effective === "dark" && !original, original, surface),
   );
+  $effect(() => {void srcdoc;selectionMenu=null;});
 
   function setupDoc(doc: Document) {
     observedDoc = doc;
@@ -210,9 +253,20 @@
       img.addEventListener("load", measure);
       img.addEventListener("error", measure);
     }
-    // The message body is never editable, so kill the WebView2 context menu
-    // here too — the parent document's handler can't reach into the iframe.
-    doc.addEventListener("contextmenu", (e) => e.preventDefault());
+    // Keep native link actions from bypassing the reader's link-safety gate.
+    doc.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      gate=null;
+      const selection=doc.getSelection(), text=selection?.toString();
+      if (!text) {selectionMenu=null;return;}
+      const rect=iframe?.getBoundingClientRect();
+      const range=selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+      const keyboard=e.clientX===0 && e.clientY===0;
+      copyFailed=false;
+      selectionMenu={text,
+        x:Math.max(8,Math.min((rect?.left ?? 0)+(keyboard ? range?.left ?? 0 : e.clientX),window.innerWidth-196)),
+        y:Math.max(8,Math.min((rect?.top ?? 0)+(keyboard ? range?.bottom ?? 0 : e.clientY),window.innerHeight-96))};
+    });
     doc.addEventListener("click", (e) => {
       const target = (e.target as HTMLElement | null)?.closest("a");
       if (!target) {
@@ -305,6 +359,15 @@
   <button class="quoted-toggle" aria-expanded={revealQuotes} onclick={() => revealQuotes=!revealQuotes}>{revealQuotes ? "Hide quoted history" : "Show quoted history"}</button>
 {/if}
 
+{#if selectionMenu}
+  <div use:atWindowRoot class="selection-menu" role="menu" aria-label={t("reading.copy")} tabindex="-1"
+    style:left={`${selectionMenu.x}px`} style:top={`${selectionMenu.y}px`}
+    onpointerdown={(event) => event.stopPropagation()} onkeydown={selectionMenuKey}>
+    <button bind:this={copyButton} role="menuitem" onclick={() => void copySelection()}>{t("reading.copy")}<kbd>Ctrl C</kbd></button>
+    {#if copyFailed}<p role="alert">{t("reading.copy_failed")}</p>{/if}
+  </div>
+{/if}
+
 {#if zoom}
   <dialog bind:this={imageDialog} class="image-dialog" aria-label={t("render.view_image")}
     onclose={() => zoom = null} oncancel={() => zoom = null}
@@ -335,6 +398,11 @@
 {/if}
 
 <style>
+  .selection-menu { position:fixed; z-index:200; width:180px; padding:6px; border:1px solid var(--hairline); border-radius:10px; background:var(--surface); color:var(--text); box-shadow:0 12px 40px #0003; }
+  .selection-menu button { display:flex; align-items:center; justify-content:space-between; width:100%; padding:9px 10px; border:0; border-radius:6px; color:inherit; background:none; text-align:left; font:inherit; font-size:12px; cursor:pointer; }
+  .selection-menu button:hover, .selection-menu button:focus-visible { background:var(--hover); outline:2px solid var(--accent); outline-offset:-2px; }
+  .selection-menu kbd { color:var(--text-faint); font:10px var(--font-mono); }
+  .selection-menu p { margin:6px 10px; font-size:11px; color:var(--text-dim); }
   .quoted-toggle { padding:7px 10px; margin-top:8px; border:1px solid var(--hairline); border-radius:7px; font-size:11px; color:var(--text-dim); }
   .quoted-toggle:hover { background:var(--hover); }
   .image-dialog { max-width: 95vw; max-height: 90vh; padding: 16px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; color: #17171b; overflow: auto; }

@@ -19,14 +19,14 @@ window.addEventListener("unhandledrejection", (e) => reportError("unhandledrejec
 
 // Suppress the WebView2 default context menu (Back / Reload / Save as / Print…):
 // it leaks the browser underneath and has no place in a native mail client.
-// Editable fields keep their menu so right-click paste/copy still works.
+// Editable fields and selected text keep their native Copy/Paste menu.
 document.addEventListener("contextmenu", (e) => {
   const el = e.target;
   const editable =
     el instanceof HTMLInputElement ||
     el instanceof HTMLTextAreaElement ||
     (el instanceof HTMLElement && el.isContentEditable);
-  if (!editable) e.preventDefault();
+  if (!editable && !document.getSelection()?.toString()) e.preventDefault();
 });
 
 const composeMatch = window.location.hash.match(/^#\/compose\/(\d+)$/);
