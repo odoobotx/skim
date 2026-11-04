@@ -86,9 +86,12 @@ pub async fn set_setting(state: State<'_, AppState>, key: String, value: String)
 /// where they can clear it, rather than describing a path through Control Panel.
 #[tauri::command]
 pub fn open_credential_manager() -> Result<()> {
+    #[cfg(target_os = "windows")]
     std::process::Command::new("control.exe")
         .args(["/name", "Microsoft.CredentialManager"])
         .spawn()?;
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("seahorse").spawn()?;
     Ok(())
 }
 

@@ -20,7 +20,7 @@ export function buildEmailDocument(body: string, dark: boolean, original: boolea
           quoteText: "#555555",
         };
     return `<!doctype html><html><head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http://skim-cid.localhost data: https: http:; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src skim-cid: http://skim-cid.localhost data: https: http:; style-src 'unsafe-inline'">
 <style>
   :root { color-scheme: ${colors.scheme}; }
   /* The background goes on the root too, not just body: the canvas takes its

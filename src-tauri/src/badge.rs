@@ -60,6 +60,7 @@ fn badge_text(count: i64) -> String {
 
 /// A standalone ~32×32 overlay: a filled red disc with the count centred.
 /// Windows scales it down into the corner of the taskbar button.
+#[cfg(any(target_os = "windows", test))]
 fn render_overlay(count: i64) -> Image<'static> {
     const SIZE: u32 = 32;
     let mut buf = vec![0u8; (SIZE * SIZE * 4) as usize];
