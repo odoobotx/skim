@@ -1252,8 +1252,9 @@ pub async fn open_attachment(
     let cache_path = file
         .cache_path
         .ok_or_else(|| SkimError::other("mail", "attachment is not downloaded yet"))?;
+    let path = super::file_for_external_app(cache_path)?;
     app.opener()
-        .open_path(cache_path, None::<&str>)
+        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
         .map_err(|e| SkimError::other("io", e.to_string()))
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "skim"
-version = "1.0.37"
+version = "1.0.38"
 description = "A fast, minimalist, AI-native email client for Windows"
 authors = ["Skim contributors"]
 license = "MIT"
@@ -55,6 +55,8 @@ sha2 = "0.11"
 getrandom = "0.3"
 # Already used by Tauri; resolve the same OS data path before AppHandle exists.
 dirs = "6"
+# Tauri already uses this for Windows shell-compatible canonical paths.
+dunce = "1"
 ammonia = "4"
 # Inline embedded email CSS only; never resolve network or filesystem stylesheets.
 css-inline = { version = "0.23.1", default-features = false }

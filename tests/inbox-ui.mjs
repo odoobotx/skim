@@ -227,6 +227,17 @@ try {
   await page.locator(".reading-host .toolbar").getByText("Browse messages",{exact:true}).waitFor();
   assert((await page.locator(".conversation-card").count())>=5,"The conversation is visible as cards without earlier/later accordions");
   assert.equal(await page.locator(".thread-more").count(),0);
+  const attachmentChips = page.locator(".reading-host .chips");
+  await attachmentChips.locator("button.name").first().click();
+  await page.waitForFunction(async()=>(await import("/demo/mock/tauri-core.ts")).commandLog.some(call=>call.cmd==="open_attachment"));
+  await page.evaluate(()=>localStorage.setItem("skimdemo.failAttachment","on"));
+  await attachmentChips.locator("button.name").first().click();
+  await attachmentChips.getByRole("alert").waitFor();
+  assert.equal(await attachmentChips.getByRole("alert").textContent(),"Synthetic attachment unavailable");
+  await page.evaluate(()=>localStorage.removeItem("skimdemo.failAttachment"));
+  await attachmentChips.locator("button.save").first().click();
+  await page.waitForFunction(async()=>(await import("/demo/mock/tauri-core.ts")).commandLog.some(call=>call.cmd==="save_attachment"));
+  assert.equal(await attachmentChips.getByRole("alert").count(),0,"Successful retry clears attachment error");
   await checkReadingScroll();
   // Account appearance applies immediately to an open email in All inboxes.
   await page.waitForFunction(() => {

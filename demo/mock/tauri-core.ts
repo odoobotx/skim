@@ -296,6 +296,10 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       return ok(undefined);
     case "list_draft_attachments":
       return ok([]);
+    case "open_attachment":
+    case "save_attachment":
+      if (localStorage.getItem("skimdemo.failAttachment") === "on") return Promise.reject(new Error("Synthetic attachment unavailable"));
+      return ok(cmd === "save_attachment" ? "saved-attachment.pdf" : undefined);
     case "suggest_addresses":
       return ok([]);
 

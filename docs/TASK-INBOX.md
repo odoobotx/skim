@@ -32,6 +32,10 @@ current preview has reached it.
 
 ## Current preview
 
+- Attachment and calendar-file opening resolves the real on-disk path before
+  handing it to another app. This handles Windows redirected AppData caches;
+  download behavior and cached files remain unchanged. Open/save failures show
+  an inline error with retry available.
 - Opt-in sender grouping: right-click a message or open its sender options, then
   choose Group by Sender. Rules use the exact normalized address and persist
   across subjects and accounts; Ungroup Sender reverses the choice.
