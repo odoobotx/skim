@@ -52,7 +52,7 @@
 {/if}
 
 <style>
-  .compose-dock { position:fixed; z-index:90; right:20px; bottom:20px; width:min(560px,calc(100vw - 40px)); height:min(560px,calc(100dvh - var(--titlebar-h) - 40px)); display:flex; flex-direction:column; min-height:0; overflow:hidden; border:1px solid var(--hairline-strong); border-radius:16px; background:var(--surface); box-shadow:0 18px 70px #0005,0 2px 8px #0002; }
+  .compose-dock { position:fixed; z-index:90; right:20px; bottom:20px; width:min(640px,calc(100vw - 40px)); height:min(560px,calc(100dvh - var(--titlebar-h) - 40px)); display:flex; flex-direction:column; min-height:0; overflow:hidden; border:1px solid var(--hairline-strong); border-radius:16px; background:var(--surface); box-shadow:0 18px 70px #0005,0 2px 8px #0002; }
   .compose-dock.expanded { inset:var(--titlebar-h) 0 0; width:auto; height:auto; border:0; border-radius:0; box-shadow:none; }
   .compose-dock.minimized { height:auto; width:min(340px,calc(100vw - 40px)); }
   .dock-header { display:flex; align-items:center; gap:12px; min-height:48px; padding:6px 10px 6px 20px; flex-shrink:0; border-bottom:1px solid var(--hairline); background:var(--bg); }
