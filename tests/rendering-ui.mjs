@@ -60,7 +60,7 @@ try {
   });
   await page.goto("http://localhost:1421/demo/rendering.html");
   await page.waitForFunction(() => typeof window.setRenderingHtml === "function");
-  const frame = page.frameLocator("iframe");
+  const frame = page.frameLocator("iframe").first();
   async function show(html) {
     await page.evaluate(value => {
       window.__previousRenderingDocument = document.querySelector("iframe")?.contentDocument;
@@ -169,7 +169,8 @@ try {
   await frame.getByText("My new reply.",{exact:true}).waitFor();
   assert.equal(await frame.getByText("Repeated earlier message.",{exact:true}).count(),0);
   await page.getByRole("button",{name:"Show quoted history",exact:true}).click();
-  await frame.getByText("Repeated earlier message.",{exact:true}).waitFor();
+  await page.frameLocator(".quoted-history iframe").first().getByText("Repeated earlier message.",{exact:true}).waitFor();
+  assert.equal(await page.locator(".history-card .history-meta strong").textContent(),"Example");
   await page.getByRole("button",{name:"Hide quoted history",exact:true}).click();
   await show('<blockquote>An inline quotation that is part of the reply.</blockquote><p>My discussion.</p>');
   await frame.getByText("An inline quotation that is part of the reply.",{exact:true}).waitFor();
@@ -180,7 +181,32 @@ try {
   await frame.getByText("My plain reply.",{exact:true}).waitFor();
   assert.equal(await frame.getByText("Repeated plain history.").count(),0);
   await page.getByRole("button",{name:"Show quoted history",exact:true}).click();
-  await frame.getByText(/Repeated plain history/).waitFor();
+  await page.frameLocator(".quoted-history iframe").first().getByText(/Repeated plain history/).waitFor();
+  const yahoo=sanitize(`<div>Current reply.</div><div><p class="yahoo-quoted-begin">On Wednesday, Nov 4, 2026 at 2:08 PM, Taylor &lt;taylor@example.com&gt; wrote:</p><blockquote class="iosymail"><p>Previous reply.</p><p>Regards, Taylor</p><div><p class="yiv123yahoo-quoted-begin">On Wednesday, Nov 4, 2026 at 1:00 PM, Alex &lt;alex@example.com&gt; wrote:</p><blockquote class="yiv123iosymail"><p>Original message.</p></blockquote></div></blockquote></div>`).html;
+  await show(yahoo);
+  await frame.getByText("Current reply.",{exact:true}).waitFor();
+  assert.equal(await frame.getByText("Previous reply.",{exact:true}).count(),0);
+  await page.getByRole("button",{name:"Show quoted history",exact:true}).click();
+  await page.locator(".history-card").nth(1).waitFor();
+  assert.deepEqual(await page.locator(".history-meta strong").allTextContents(),["Taylor","Alex"]);
+  await page.frameLocator(".history-card iframe").nth(0).getByText("Previous reply.",{exact:true}).waitFor();
+  await page.frameLocator(".history-card iframe").nth(1).getByText("Original message.",{exact:true}).waitFor();
+  assert.equal(await page.frameLocator(".history-card iframe").nth(0).getByText("Original message.",{exact:true}).count(),0,"Nested history is not repeated within each quote card");
+  const parse=html=>page.evaluate(async html=>{
+    const {withoutQuotedHistory}=await import("/src/lib/quoted-history.ts");
+    const result=withoutQuotedHistory(html);
+    const text=html=>{const t=document.createElement("template");t.innerHTML=html;return t.content.textContent.trim();};
+    return {own:text(result.html),hasQuoted:result.hasQuoted,history:result.history.map(q=>({...q,html:text(q.html)}))};
+  },html);
+  const outlook=await parse(sanitize('<p>My reply.</p><div id="divRplyFwdMsg">From: Taylor &lt;taylor@example.com&gt;<br>Sent: Wednesday, November 4, 2026<br>To: Alex</div><p>Outlook history.</p>').html);
+  assert.equal(outlook.own,"My reply.");assert.equal(outlook.history[0].html,"Outlook history.");
+  assert.equal(outlook.history[0].sender,"Taylor");assert.equal(outlook.history[0].date,"Wednesday, November 4, 2026");
+  const plain=await parse('<pre class="skim-plain">My response.\n\n-- \nAlex\nOn Wednesday, Taylor wrote:\n&gt; Previous text.\n&gt; On Tuesday, Sam wrote:\n&gt; &gt; Original text.</pre>');
+  assert(plain.own.includes("-- \nAlex"),"Signatures stay with their own message");
+  assert.deepEqual(plain.history.map(q=>q.html),["Previous text.","Original text."]);
+  assert.equal((await parse('<blockquote>Intentional inline quote.</blockquote><p>My thoughts.</p>')).hasQuoted,false);
+  assert.equal((await parse('<pre class="skim-plain">On Tuesday, Taylor wrote:\n&gt; Entire message.</pre>')).hasQuoted,false,"A quote-only message remains visible");
+  assert.equal((await parse('<img src="data:image/png;base64,AA"><div class="gmail_quote"><p>Quoted text.</p></div>')).hasQuoted,true,"An image-only authored message remains visible");
   await page.evaluate(()=>window.setRenderingConversation(false));
   await show(blocked.html);
   await frame.getByText("Safe text").waitFor();

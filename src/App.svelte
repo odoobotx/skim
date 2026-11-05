@@ -314,10 +314,16 @@
   async function replyToSelected(mode: "reply" | "reply_all" | "forward" = "reply") {
     const thread = mail.selectedThread;
     if (!thread) return;
-    const detail = await api.getThread(thread.id);
-    const latest = detail.messages[detail.messages.length - 1];
-    const draft = await api.getReplyTemplate(latest.id, mode);
-    ui.openComposer(draft);
+    const messageId = ui.openMessageId ?? mail.selectedMessageId;
+    try {
+      const detail = await api.getThread(thread.id);
+      if (mail.selectedThreadId !== thread.id) return;
+      const target = detail.messages.find(message => message.id === messageId)
+        ?? detail.messages.slice().sort((a,b) => a.date-b.date || a.id-b.id).at(-1);
+      if (!target) return;
+      const draft = await api.getReplyTemplate(target.id, mode);
+      ui.openComposer(draft);
+    } catch (error) { reportError("reading.reply",error);mail.noteError(t("ops.failed")); }
   }
 
   async function composeNew() {

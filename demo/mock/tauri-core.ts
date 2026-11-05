@@ -255,10 +255,6 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     }
     case "get_thread": {
       const detail = db.threadDetail(args.threadId);
-      if (localStorage.getItem("skimdemo.taskInbox") === "on" && detail.messages.length) {
-        detail.messages.unshift({ ...detail.messages[0], id: 99999, folderId: 3, date:detail.messages[0].date-3600,
-          from:{name:"Alex Morgan",addr:"alex@brightwave.io"},snippet:"Here is my earlier reply." });
-      }
       return ok(detail);
     }
     case "get_message_body": {

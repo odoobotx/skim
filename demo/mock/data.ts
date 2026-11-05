@@ -4,6 +4,8 @@
 // (but entirely fake) mailbox and canned AI output for each feature we show
 // off. Nothing here talks to a real server, account, or model.
 
+import type { MessageMeta } from "../../src/lib/types";
+
 const NOW = Math.floor(Date.now() / 1000);
 const H = 3600;
 const D = 86400;
@@ -382,8 +384,7 @@ export function bodyFor(threadId: number): string {
   return BODIES[threadId] ?? GENERIC_BODY;
 }
 
-// A thread's messages. The reading pane shows the newest one in-folder, so a
-// single well-formed message per thread is enough for the demo.
+// Chronological conversations with individual message bodies and reply targets.
 export function threadDetail(threadId: number) {
   const secondary = ACC2_INBOX_THREADS.find((x) => x.id === threadId) ?? THREADS_BY_FOLDER[13]?.find(x=>x.id===threadId);
   const inInbox = INBOX_THREADS.find((x) => x.id === threadId) ?? ACC2_INBOX_THREADS.find(x=>x.id===threadId);
@@ -404,18 +405,26 @@ export function threadDetail(threadId: number) {
     const outgoing=i<count-1 && i%2===1;
     const id=i===count-1 ? t.id*10+1 : t.id*100+10+i;
     const text=steps[Math.min(i,steps.length-1)];
-    if (count>1) CONVERSATION_BODIES[id]=`<p>${text}</p>${i>0 ? `<div class="gmail_quote"><div class="gmail_attr">On an earlier date, the conversation continued:</div><p>${steps[Math.min(i-1,steps.length-1)]}</p></div>` : ""}`;
     return {id,accountId:secondary ? "acc-2" : "acc-1",folderId:outgoing ? (secondary ? 13 : 3) : folderId,
       threadId:t.id,subject:t.subject,
       from:outgoing ? {name:"Alex Morgan",addr:secondary ? ACCOUNT2.email : ACCOUNT.email} : {name:t.fromName,addr:t.fromAddr},
       to:[{name:outgoing ? t.fromName : "Alex Morgan",addr:outgoing ? t.fromAddr : (secondary ? ACCOUNT2.email : ACCOUNT.email)}],
-      cc:[],date:t.date-(count-1-i)*H,snippet:count>1 ? text : t.snippet,isRead:i<count-1 || t.isRead,
-      isStarred:t.isStarred,hasAttachments:i===count-1 && t.hasAttachments,bodyState:2};
+      cc:threadId===101 ? [{name:"Sam Patel",addr:"sam@northwind.example"}] : [],date:t.date-(count-1-i)*H,snippet:count>1 ? text : t.snippet,isRead:i<count-1 || t.isRead,
+      isStarred:t.isStarred,hasAttachments:i===count-1 && t.hasAttachments,bodyState:2,canUnsubscribe:false};
   });
+  for (const [i,message] of messages.entries()) {
+    MESSAGE_HEADERS[message.id]=message;
+    if (count>1) {
+      const previous=messages[i-1];
+      const quoted=previous ? `<div class="gmail_quote"><div class="gmail_attr">On ${new Date(previous.date*1000).toLocaleString("en-US")}, ${previous.from.name} &lt;${previous.from.addr}&gt; wrote:</div>${CONVERSATION_BODIES[previous.id]}</div>` : "";
+      CONVERSATION_BODIES[message.id]=`<p>${message.snippet}</p><p>Thanks,<br>${message.from.name}</p>${quoted}`;
+    }
+  }
   return {id:t.id,subject:t.subject,messages};
 }
 
 const CONVERSATION_BODIES:Record<number,string>={};
+const MESSAGE_HEADERS:Record<number,MessageMeta>={};
 
 export function renderedBody(messageId: number) {
   const attachments =
@@ -511,19 +520,26 @@ export function createDraft() {
 
 export function replyTemplate(messageId: number, mode: string) {
   const id = ++draftSeq;
-  const threadId = Math.floor(messageId / 10);
-  const t = INBOX_THREADS.find((x) => x.id === threadId);
-  const quoted = `\n\nOn ${new Date((t?.date ?? NOW) * 1000).toDateString()}, ${t?.fromName ?? "Anna Weber"} <${t?.fromAddr ?? "anna.weber@northwind.example"}> wrote:\n> ${(t?.snippet ?? "").slice(0, 80)}…`;
+  const message=MESSAGE_HEADERS[messageId];
+  if (!message) throw new Error("Demo message not loaded");
+  const account=message.accountId===ACCOUNT2.id ? ACCOUNT2 : ACCOUNT;
+  const outgoing=message.from.addr.toLowerCase()===account.email.toLowerCase();
+  const recipients=mode==="forward" ? [] : mode==="reply_all" ? [message.from,...message.to,...message.cc] : outgoing ? message.to : [message.from];
+  const seen=new Set([account.email.toLowerCase()]);
+  const to=recipients.filter(address=>{
+    const key=address.addr.toLowerCase();if (seen.has(key)) return false;seen.add(key);return true;
+  }).map(address=>address.name ? `${address.name} <${address.addr}>` : address.addr).join(", ");
+  const quoted=`\n\nOn ${new Date(message.date*1000).toDateString()}, ${message.from.name} <${message.from.addr}> wrote:\n> ${message.snippet}`;
   const d = {
     id,
-    accountId: "acc-1",
+    accountId: message.accountId,
     replyToMessageId: messageId,
     mode,
-    to: mode === "forward" ? "" : t ? `${t.fromName} <${t.fromAddr}>` : "Anna Weber <anna.weber@northwind.example>",
+    to,
     cc: "",
     bcc: "",
-    subject: mode === "forward" ? `Fwd: ${t?.subject ?? "Q3 launch"}` : (t?.subject ?? "").startsWith("Re:") ? t!.subject : `Re: ${t?.subject ?? "Q3 launch"}`,
-    body: sigBlock() + quoted,
+    subject: mode === "forward" ? `Fwd: ${message.subject}` : message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`,
+    body: sigBlock(message.accountId) + quoted,
     originMessageId: null,
   };
   DRAFTS[id] = d;

@@ -256,14 +256,14 @@ try {
       return el && el.scrollHeight>el.clientHeight+600;
     });
     const scroll=page.locator(".reading-host .scroll");
-    const iframe=page.locator(".reading-host iframe");
+    const iframe=page.locator(".reading-host iframe").first();
     await iframe.waitFor();
     const box=await iframe.boundingBox();
     await page.mouse.move(box.x+Math.min(box.width/2,200),Math.max(150,Math.min(box.y+70,800)));
     await page.mouse.wheel(0,650);
     await page.waitForFunction(()=>document.querySelector(".reading-host .scroll").scrollTop>200);
     assert(await scroll.evaluate(el=>el.getBoundingClientRect().bottom<=window.innerHeight),"Reading scroller must remain inside the window");
-    assert(await page.locator(".reading-host footer.actions").isVisible(),"Reply actions remain reachable");
+    assert(await page.locator(".reading-host footer.card-actions").last().isVisible(),"Reply actions remain reachable");
     await page.mouse.click(box.x+Math.min(box.width/2,200),Math.max(150,Math.min(box.y+70,800)));
     await page.keyboard.press("Home");
     await page.waitForFunction(()=>document.querySelector(".reading-host .scroll").scrollTop===0);

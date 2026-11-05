@@ -65,11 +65,11 @@
   type Translating = { current: number; total: number } | { error: string };
   let translating = $state<Record<number, Translating>>({});
   let loadedFor = $state<string | null>(null);
-  // The focused (fully open) message in the conversation. Reply/AI actions
-  // target it; newer messages collapse above it, older ones below. Defaults to
-  // the latest-in-folder message on thread load.
+  // The active card supplies keyboard/AI context; every card stays expanded.
   let focusedId = $state<number | null>(null);
-  let focusedEl = $state<HTMLDivElement | undefined>();
+  let following = true;
+  let threadRequest = 0;
+  let replying = $state<number[]>([]);
 
   // The newest message of the thread IN THE CURRENT FOLDER — the default focus,
   // the flat-view fallback, and the read/loadKey anchor.
@@ -101,12 +101,6 @@
     return latest;
   });
 
-  // A message is outgoing if it's from the account owner (his own reply). The
-  // unified view owns every connected address.
-  function isOutgoing(m: MessageMeta): boolean {
-    return mail.myEmails.includes(m.from.addr.toLowerCase());
-  }
-
   // The message reply/AI actions target: focused in conversation, else shown.
   const replyTarget = $derived(conversation ? focused : shown);
 
@@ -115,6 +109,7 @@
   // The message list keeps the original — it is an index, and recognizing a
   // message there beats reading it.
   const shownSubject = $derived.by(() => {
+    if (conversation) return detail?.subject || "—";
     const id = replyTarget?.id;
     const body = id != null ? bodies[id] : undefined;
     const translate = typeof body === "object" ? body.translate : null;
@@ -166,8 +161,7 @@
 
   // Reply-all only makes sense with more than one other party (sender + other
   // recipients besides me). With a single correspondent it equals Reply.
-  const canReplyAll = $derived.by(() => {
-    const m = replyTarget;
+  function canReplyAll(m: MessageMeta | null) {
     if (!m) return false;
     const mine = mail.myEmails;
     const others = new Set<string>();
@@ -176,26 +170,61 @@
       if (addr && !mine.includes(addr)) others.add(addr);
     }
     return others.size > 1;
-  });
+  }
 
   // Open a different message from the chain. The AI target follows, so the dock
   // shows that message's chat (usually none, until it is asked something).
   function setFocus(id: number) {
-    if (id === focusedId) return;
     focusedId = id;
+    ui.setOpenMessage(id);
+  }
+
+  function interact(id: number) { following = false; setFocus(id); }
+
+  function watchMessage(node: HTMLElement, id: number) {
+    const observer = new IntersectionObserver(entries => {
+      if (!entries.some(entry => entry.isIntersecting)) return;
+      if (bodies[id] === undefined && detail?.messages.some(message => message.id === id)) void loadBody(id);
+      observer.disconnect();
+    }, {root: node.closest(".scroll"), rootMargin: "500px"});
+    observer.observe(node);
+    return {destroy: () => observer.disconnect()};
+  }
+
+  function followConversation(node: HTMLElement) {
+    const scroll = node.closest<HTMLElement>(".scroll")!;
+    following = true;
+    const bottom = () => {
+      if (following) scroll.scrollTop = scroll.scrollHeight;
+    };
+    const moved = () => {
+      if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 24) following = true;
+    };
+    // Content shrinking can also lower scrollTop; only user input pauses following.
+    const pause = () => { following = false; };
+    const key = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof Element && event.target.closest("input,textarea,[contenteditable]"))) return;
+      if (["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(event.key)) pause();
+    };
+    const observer = new ResizeObserver(bottom);
+    observer.observe(node); observer.observe(scroll);
+    scroll.addEventListener("scroll", moved);
+    scroll.addEventListener("wheel", pause, {passive:true});
+    scroll.addEventListener("pointerdown", pause);
+    scroll.addEventListener("touchstart", pause, {passive:true});
+    window.addEventListener("keydown", key);
+    bottom();
+    return {destroy: () => {
+      observer.disconnect();scroll.removeEventListener("scroll",moved);scroll.removeEventListener("wheel",pause);
+      scroll.removeEventListener("pointerdown",pause);scroll.removeEventListener("touchstart",pause);window.removeEventListener("keydown",key);
+    }};
   }
 
   // Fetch on demand the body of the open message (focused in conversation view,
-  // or the single shown message in flat view). Collapsed rows need only snippets.
+  // or the single shown message in flat view). Other cards load near the viewport.
   $effect(() => {
     const m = conversation ? focused : shown;
     if (m && bodies[m.id] === undefined) void loadBody(m.id);
-  });
-
-  // Keep the open message in view when navigating the chain.
-  $effect(() => {
-    void focusedId;
-    if (conversation) focusedEl?.scrollIntoView({ block: "nearest" });
   });
 
   // Expose the AI actions to the global keyboard handler (Q, T) in App.svelte.
@@ -243,11 +272,15 @@
   });
 
   async function loadThread(threadId: number) {
-    detail = null;
-    bodies = {};
-    bodyErrors = {};
-    bodyReq.clear();
-    viewOpts = {};
+    const request = ++threadRequest;
+    const refreshing = detail?.id === threadId;
+    if (!refreshing) {
+      detail = null;
+      bodies = {};
+      bodyErrors = {};
+      bodyReq.clear();
+      viewOpts = {};
+    }
     // `translating` is NOT reset: a translation still being generated belongs to
     // its message, not to this pane, and clearing it here would offer to start a
     // second one for the same message on the way back.
@@ -255,19 +288,24 @@
     // follows whichever message the pane settles on.
     try {
       const d = await api.getThread(threadId);
-      if (mail.selectedThreadId !== threadId) return;
+      if (mail.selectedThreadId !== threadId || request !== threadRequest) return;
+      d.messages.sort((a,b) => a.date-b.date || a.id-b.id);
       detail = d;
       const msgs = d.messages;
       const inFolder = msgs.filter((m) => m.folderId === mail.selectedFolderId);
-      focusedId = (inFolder.length ? inFolder[inFolder.length - 1] : msgs[msgs.length - 1])?.id ?? null;
+      if (!refreshing || following || !msgs.some(message => message.id === focusedId)) {
+        focusedId = (conversation ? msgs[msgs.length - 1] : inFolder.length ? inFolder[inFolder.length - 1] : msgs[msgs.length - 1])?.id ?? null;
+      }
 
       const unread = d.messages.filter((m) => !m.isRead).map((m) => m.id);
       if (unread.length > 0) {
         mail.patchThreadRow(threadId, { isRead: true });
         void api.markRead(unread, true);
       }
-    } catch {
-      detail = null;
+    } catch (error) {
+      if (request !== threadRequest || mail.selectedThreadId !== threadId) return;
+      reportError("reading.thread",error);
+      mail.noteError(t("ops.failed"));
     }
   }
 
@@ -477,11 +515,14 @@
     });
   }
 
-  async function reply(mode: "reply" | "reply_all" | "forward") {
-    const target = replyTarget;
-    if (!target) return;
-    const draft = await api.getReplyTemplate(target.id, mode);
-    ui.openComposer(draft);
+  async function reply(mode: "reply" | "reply_all" | "forward", target = replyTarget) {
+    if (!target || replying.includes(target.id)) return;
+    replying = [...replying,target.id];
+    try {
+      const draft = await api.getReplyTemplate(target.id, mode);
+      ui.openComposer(draft);
+    } catch (error) { reportError("reading.reply",error);mail.noteError(t("ops.failed")); }
+    finally { replying = replying.filter(id => id !== target.id); }
   }
 </script>
 
@@ -576,21 +617,17 @@
       </button>
     </header>
 
-    <div class="scroll">
-      <div class="subject-row copy-host">
+      <div class="subject-row copy-host reader-subject">
         <h1 class="subject">{shownSubject}</h1>
         <CopyAffordance value={shownSubject} label={t("reading.copy_subject")} />
       </div>
-
+    <div class="scroll">
       {#if conversation}
-        <div class="convo">
+        <div class="convo" use:followConversation>
           {#each detail.messages as m (m.id)}
-            <div class="conversation-card" class:outgoing={isOutgoing(m)} class:active={focused?.id === m.id}>
-              {#if focused?.id === m.id}
-                <div bind:this={focusedEl}>{@render messageBlock(m,bodies[m.id])}</div>
-              {:else}
-                {@render chatRow(m)}
-              {/if}
+            <div class="conversation-card" role="group" aria-label={`Message from ${m.from.name || m.from.addr}`} data-message-id={m.id} class:active={focused?.id === m.id}
+              use:watchMessage={m.id} onpointerdown={() => interact(m.id)} onfocusin={() => interact(m.id)}>
+              {@render messageBlock(m,bodies[m.id])}
             </div>
           {/each}
         </div>
@@ -611,16 +648,16 @@
       />
     {/if}
 
-    <footer class="actions">
+    {#if !conversation}<footer class="actions">
       {#if ai.keyPresent}
         <button class="ai-btn" onclick={openAsk}>✦ {t("ai.ask")}<kbd>Q</kbd></button>
       {/if}
       <button class="btn" onclick={() => reply("reply")}>{t("reading.reply")}<kbd>R</kbd></button>
-      {#if canReplyAll}
+      {#if canReplyAll(replyTarget)}
         <button class="btn" onclick={() => reply("reply_all")}>{t("reading.reply_all")}<kbd>A</kbd></button>
       {/if}
       <button class="btn" onclick={() => reply("forward")}>{t("reading.forward")}<kbd>F</kbd></button>
-    </footer>
+    </footer>{/if}
 
     {#if hoverUrl}
       <!-- Browser-style status bar: the real destination of the hovered link. -->
@@ -636,7 +673,7 @@
   {@const loaded = typeof body === "object" ? body : null}
   {@const job = translating[message.id]}
   {@const offerTranslate = ai.keyPresent && (loaded?.translate != null || job != null)}
-  <article class="message">
+  <article class="message" aria-label={`Email from ${message.from.name ?? message.from.addr}`}>
     <div class="meta">
       <span class="avatar">{initial(message.from.name ?? message.from.addr)}</span>
       <div class="who">
@@ -764,6 +801,7 @@
                 trimQuotes={conversation && (detail?.messages.length ?? 0)>1}
                 security={body.security?.links}
                 onHoverUrl={(u) => (hoverUrl = u)}
+                onInteract={() => interact(message.id)}
               />
             </div>
           </details>
@@ -776,6 +814,7 @@
                 trimQuotes={conversation && (detail?.messages.length ?? 0)>1}
             security={body.security?.links}
             onHoverUrl={(u) => (hoverUrl = u)}
+            onInteract={() => interact(message.id)}
           />
         </div>
       {:else}
@@ -786,6 +825,19 @@
       {#if body.attachments.length > 0}
         <AttachmentChips attachments={body.attachments} />
       {/if}
+    {/if}
+    {#if conversation}
+      <footer class="card-actions">
+        {#if ai.keyPresent}<button class="card-ask" onclick={() => {setFocus(message.id);openAsk();}}>✦ {t("ai.ask")}</button>{/if}
+        <span class="spacer"></span>
+        <button disabled={replying.includes(message.id)} onclick={() => void reply("reply",message)}>
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 4 2 10l6 6M2 10h9a6 6 0 0 1 6 6"/></svg>{t("reading.reply")}
+        </button>
+        {#if canReplyAll(message)}<button disabled={replying.includes(message.id)} onclick={() => void reply("reply_all",message)}>{t("reading.reply_all")}</button>{/if}
+        <button disabled={replying.includes(message.id)} onclick={() => void reply("forward",message)}>
+          {t("reading.forward")}<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m12 4 6 6-6 6M18 10H9a6 6 0 0 0-6 6"/></svg>
+        </button>
+      </footer>
     {/if}
   </article>
 {/snippet}
@@ -821,26 +873,6 @@
       >
     {/if}
   </div>
-{/snippet}
-
-{#snippet chatRow(m: MessageMeta)}
-  <button
-    class="chat-row"
-    class:outgoing={isOutgoing(m)}
-    class:unread={!m.isRead}
-    onclick={() => setFocus(m.id)}
-  >
-    <span class="avatar sm">{initial(m.from.name ?? m.from.addr)}</span>
-    <div class="chat-bubble">
-      <div class="chat-head">
-        <span class="chat-name">
-          {isOutgoing(m) ? t("reading.you") : (m.from.name ?? m.from.addr)}
-        </span>
-        <span class="chat-date">{formatFull(m.date)}</span>
-      </div>
-      <div class="chat-snippet">{m.snippet}</div>
-    </div>
-  </button>
 {/snippet}
 
 <style>
@@ -1053,77 +1085,18 @@
     border-bottom: none;
   }
 
-  /* ---- Conversation (chat) view ---- */
-  .conversation-card { min-width:0; border:1px solid var(--hairline); border-radius:14px; margin-right:24px; overflow:hidden; }
+  .reader-subject { padding:8px 36px 4px; margin:0; }
+  .conversation-card { min-width:0; border:1px solid var(--hairline); border-radius:14px; overflow:hidden; background:var(--surface); }
   .conversation-card.active { border-color:var(--hairline-strong); }
-  .conversation-card.outgoing { margin-right:0; margin-left:24px; background:var(--hover); }
-  .conversation-card .message { padding:0 16px 16px; margin:0; border:0; }
-  .convo {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-top: 12px;
-  }
-  .chat-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    width: 100%;
-    text-align: left;
-    padding: 12px;
-    transition: opacity 0.08s;
-  }
-  .avatar.sm {
-    width: 26px;
-    height: 26px;
-    font-size: 11px;
-  }
-  .chat-bubble {
-    flex: 1;
-    min-width: 0;
-    padding: 0;
-    border-radius: 8px;
-  }
-  .chat-row:hover { background:var(--hover); }
-  .chat-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .chat-name {
-    font-weight: 600;
-    font-size: 12.5px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .chat-row.unread .chat-name {
-    font-weight: 800;
-  }
-  .chat-date {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-faint);
-    flex-shrink: 0;
-  }
-  .chat-snippet {
-    font-size: 12.5px;
-    color: var(--text-faint);
-    margin-top: 2px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: normal;
-    overflow-wrap:anywhere;
-    display:-webkit-box;
-    -webkit-line-clamp:3;
-    line-clamp:3;
-    -webkit-box-orient:vertical;
-  }
-  /* Outgoing (your own replies): mirrored to the right, tinted. */
-  .chat-row.outgoing {
-    flex-direction: row-reverse;
-  }
+  .conversation-card .message { padding:0 20px 14px; margin:0; border:0; }
+  .convo { display:flex; flex-direction:column; gap:16px; margin-top:8px; overflow-anchor:none; }
+  .card-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding-top:14px; }
+  .card-actions .spacer { flex:1; }
+  .card-actions button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:30px; padding:5px 10px; border-radius:7px; color:var(--text-dim); font-size:12px; transition:background .12s,color .12s; }
+  .card-actions button:hover { color:var(--text); background:var(--hover); }
+  .card-actions button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .card-actions button:disabled { opacity:.5; }
+  @media (prefers-reduced-motion:reduce) { .card-actions button { transition:none; } }
 
   .meta {
     display: flex;
