@@ -39,6 +39,27 @@ try {
   catch(error) { console.error("Startup errors:",errors);console.error((await page.locator("body").innerText()).slice(0,1000));throw error; }
   assert.equal(await page.locator("nav.sidebar").count(), 0, "Home must be separate from inbox navigation");
   await page.getByRole("button", {name:"Search mail",exact:true}).waitFor();
+  const homeControls=[page.getByRole("button",{name:"Check Inbox",exact:true}),page.getByRole("button",{name:"Search mail",exact:true}),page.getByRole("button",{name:"Compose",exact:true}),page.locator(".mail-preview").first()];
+  for (const control of homeControls) {
+    await control.hover({position:{x:8,y:8}});
+    await page.waitForFunction(el=>el.getAnimations({subtree:true}).some(animation=>animation.playState==="running"),await control.elementHandle());
+    const origin=await control.evaluate(el=>({x:parseFloat(el.style.getPropertyValue("--ripple-x")),y:parseFloat(el.style.getPropertyValue("--ripple-y"))}));
+    assert(origin.x>=0 && origin.x<20 && origin.y>=0 && origin.y<20,"Hover ripple starts near the pointer entry");
+    await page.waitForFunction(el=>el.getAnimations({subtree:true}).every(animation=>animation.playState!=="running"),await control.elementHandle());
+    assert.equal(await control.evaluate(el=>getComputedStyle(el,"::after").opacity),"0","The ripple settles while the pointer stays over the control");
+  }
+  assert.equal(await page.locator(".mail-preview").first().evaluate(el=>getComputedStyle(el).transform),"none","Hover does not move or indent unread rows");
+  await page.emulateMedia({reducedMotion:"reduce"});
+  for (const control of homeControls) {
+    await control.hover();
+    assert.equal(await control.evaluate(el=>el.getAnimations({subtree:true}).filter(animation=>animation.playState==="running").length),0,"Reduced motion disables the ripple and hover movement");
+    assert.equal(await control.evaluate(el=>getComputedStyle(el).transform),"none");
+    await control.focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await control.evaluate(el=>getComputedStyle(el).outlineStyle),"solid","Keyboard focus stays visible");
+  }
+  await page.emulateMedia({reducedMotion:"no-preference"});
   await page.getByRole("button", {name:"Compose",exact:true}).click();
   await page.locator(".compose-dock").waitFor();
   await page.getByRole("button",{name:"Close and save draft",exact:true}).click();
