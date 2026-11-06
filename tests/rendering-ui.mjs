@@ -48,6 +48,10 @@ try {
     const url = new URL(route.request().url());
     if (url.hostname === "localhost" && url.port === "1421") return route.continue();
     if (url.hostname === "skim-cid.localhost") {
+      if (/mixed/i.test(url.pathname)) {
+        if (decodeURIComponent(url.pathname)!=='/1/image001.png@Example.Mixed') return route.fulfill({status:404,body:''});
+        return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect width="100" height="50" fill="#4579ae"/></svg>'});
+      }
       const small = url.pathname.endsWith("/small");
       return route.fulfill({ contentType: "image/svg+xml", body:
         `<svg xmlns="http://www.w3.org/2000/svg" width="${small ? 100 : 2104}" height="${small ? 50 : 905}"><rect x="20" y="20" width="600" height="400" rx="60" fill="#e53935"/><text x="20" y="820" font-size="250" fill="black">EXAMPLE</text></svg>` });
@@ -71,6 +75,10 @@ try {
       return doc !== window.__previousRenderingDocument && doc?.body?.childElementCount > 0;
     });
   }
+  await show(sanitize('<p>Embedded image.</p><img src="CiD:image001.png@Example.Mixed" alt="Mixed-case embedded image">').html);
+  await frame.getByAltText('Mixed-case embedded image').waitFor();
+  await page.waitForFunction(()=>{const image=document.querySelector('iframe')?.contentDocument?.querySelector('img');return image?.complete;});
+  assert.equal(await frame.getByAltText('Mixed-case embedded image').evaluate(el=>el.naturalWidth),100,'Inline image IDs must match the cached MIME part exactly');
   await show(sanitized.html);
   assert.notEqual(await frame.locator("body").evaluate(el => getComputedStyle(el).backgroundColor),"rgb(255, 255, 255)","App theme is the default");
   assert.equal(await page.getByLabel("Email appearance",{exact:true}).count(),0,"Appearance is an account setting");

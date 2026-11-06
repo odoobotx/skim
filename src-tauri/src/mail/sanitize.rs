@@ -333,9 +333,10 @@ pub fn sanitize_email_html(
                 return None;
             }
             if element == "img" && attribute == "src" {
-                let lower = value.trim().to_lowercase();
-                if let Some(cid) = lower.strip_prefix("cid:") {
-                    return Some(Cow::Owned(cid_url(message_id, cid.trim())));
+                let trimmed = value.trim();
+                let lower = trimmed.to_lowercase();
+                if lower.starts_with("cid:") {
+                    return Some(Cow::Owned(cid_url(message_id, trimmed[4..].trim())));
                 }
                 if lower.starts_with("data:image/") {
                     return Some(Cow::Owned(value.to_string()));
@@ -409,6 +410,15 @@ mod tests {
         assert_eq!(cid_url(42, "logo@mail"), expected);
         let rendered = sanitize_email_html(r#"<img src="cid:logo@mail">"#, 42, false);
         assert!(rendered.html.contains(expected));
+        assert_eq!(rendered.blocked_images, 0);
+    }
+
+    #[test]
+    fn inline_image_content_ids_keep_their_case() {
+        let cid = "image001.png@01DD6D0B.AEB79E80";
+        let rendered = sanitize_email_html(&format!(r#"<img src="CiD:{cid}">"#), 42, false);
+        assert!(rendered.html.contains(&cid_url(42, cid)));
+        assert!(!rendered.html.contains(&cid_url(42, &cid.to_lowercase())));
         assert_eq!(rendered.blocked_images, 0);
     }
 
