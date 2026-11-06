@@ -22,7 +22,7 @@ function header(text: string): Omit<QuotedMessage,"html"> {
   const from=attribution.match(/\bFrom\s*:\s*(.*?)(?=\n|\bSent\s*:|\bDate\s*:|\bTo\s*:|$)/i);
   const sent=attribution.match(/\b(?:Sent|Date)\s*:\s*(.*?)(?=\n|\bTo\s*:|\bSubject\s*:|$)/i);
   const parts=on?.[1].match(/^(.*),\s*([^,]+)$/);
-  const sender=(parts?.[2] ?? from?.[1] ?? "").replace(/\s*<[^<>]+>\s*$/,"").trim();
+  const sender=(parts?.[2] ?? from?.[1] ?? "").replace(/\s*<.*$/,"").trim();
   return {sender:sender || null,date:parts?.[1]?.trim() || sent?.[1]?.trim() || null,attribution};
 }
 
@@ -119,27 +119,59 @@ function extract(root: DocumentFragment): QuoteSeed[] {
   });
 }
 
-function plainHistory(html: string, plain: Element): {html:string;hasQuoted:boolean;history:QuotedMessage[]} {
-  const history:QuotedMessage[]=[];
-  let lines=(plain.textContent ?? "").split("\n"), attribution="", own="";
-  while (lines.length) {
-    const boundary=lines.findIndex(line=>/^On .+wrote:\s*$/i.test(line.trim()) || /^-----Original Message-----\s*$/i.test(line.trim()));
-    const body=(boundary<0 ? lines : lines.slice(0,boundary)).join("\n").trimEnd();
-    if (!history.length && !attribution) {
-      if (boundary<=0) return {html,hasQuoted:false,history:[]};
-      own=body;
-    } else if (body.trim()) {
-      const pre=document.createElement("pre");pre.className="skim-plain";pre.textContent=body;
-      history.push({html:pre.outerHTML,...header(attribution)});
+function plainBoundary(lines: string[], start: number): {end: number; attribution: string} | null {
+  const clean=(line:string)=>line.replace(/^\s*(?:>\s*)+/,"").trim();
+  const first=clean(lines[start]);
+  if (first.length>1600) return null;
+  if (/^-+Original Message-+\s*$/i.test(first)) return {end:start+1,attribution:first};
+  if (/^On\s+/i.test(first)) {
+    let attribution="";
+    for (let i=start;i<Math.min(start+4,lines.length);i++) {
+      attribution+=(attribution ? " " : "")+clean(lines[i]);
+      if (attribution.length>1600) break;
+      if (/^On\s+.+\s+wrote:\s*$/i.test(attribution)) return {end:i+1,attribution};
     }
-    if (boundary<0) break;
-    attribution=lines[boundary].trim();lines=lines.slice(boundary+1);
-    const nonempty=lines.filter(line=>line.trim());
-    if (nonempty.length && nonempty.every(line=>/^\s*>/.test(line))) lines=lines.map(line=>line.replace(/^\s*> ?/,""));
   }
-  if (!history.length) return {html,hasQuoted:false,history:[]};
-  const pre=document.createElement("pre");pre.className="skim-plain";pre.textContent=own;
-  return {html:pre.outerHTML,hasQuoted:true,history};
+  if (!/^From\s*:/i.test(first)) return null;
+  const fields: string[]=[];
+  let end=start;
+  for (;end<Math.min(start+16,lines.length);end++) {
+    const line=clean(lines[end]);
+    if (!line) continue;
+    if (line.length>1600 || fields.join("\n").length+line.length>1600) break;
+    if (!headerLine.test(line) || (fields.length>0 && /^From\s*:/i.test(line))) break;
+    fields.push(line);
+  }
+  return isMailHeader(fields) ? {end,attribution:fields.join("\n")} : null;
+}
+
+function plainHistory(html: string, plain: Element): {html:string;hasQuoted:boolean;history:QuotedMessage[]} {
+  const lines=(plain.textContent ?? "").split("\n"), history:QuotedMessage[]=[];
+  const pre=(text:string)=>{const element=document.createElement("pre");element.className="skim-plain";element.textContent=text;return element.outerHTML;};
+  let start=0,attribution="",own="",quoted=false;
+  function add(end: number) {
+    let body=lines.slice(start,end);
+    if (quoted) {
+      body=body.map(line=>/^\s*(?:>\s*)+$/.test(line) ? "" : line);
+      // Remove only shared quote indentation; intentional comparisons/inline quotes remain.
+      const meaningful=body.filter(line=>line.replace(/[>\s]/g,"").length);
+      while (meaningful.length && meaningful.every(line=>/^\s*>(?:[ \t]|>|$)/.test(line))) {
+        body=body.map(line=>line.replace(/^\s*>[ \t]?/,""));
+        for (let i=0;i<meaningful.length;i++) meaningful[i]=meaningful[i].replace(/^\s*>[ \t]?/,"");
+      }
+    }
+    const text=body.join("\n").trimEnd();
+    if (!quoted) own=text;
+    else if (text.trim()) history.push({html:pre(text),...header(attribution)});
+  }
+  for (let i=0;i<lines.length;i++) {
+    const boundary=plainBoundary(lines,i);
+    if (!boundary) continue;
+    if (!quoted && !lines.slice(0,i).join("\n").trim()) return {html,hasQuoted:false,history:[]};
+    add(i);quoted=true;attribution=boundary.attribution;start=boundary.end;i=boundary.end-1;
+  }
+  add(lines.length);
+  return history.length ? {html:pre(own),hasQuoted:true,history} : {html,hasQuoted:false,history:[]};
 }
 
 /** Input is sanitized. Each history card contains only text actually quoted in this email. */
@@ -147,6 +179,12 @@ export function withoutQuotedHistory(html: string): {html:string;hasQuoted:boole
   const template=document.createElement("template");template.innerHTML=html;
   const root=template.content, plain=root.querySelector("pre.skim-plain");
   if (plain && root.childElementCount===1 && root.firstElementChild===plain) return plainHistory(html,plain);
+  // Some clients encode plain-text mail as nothing but text, <br> and body wrappers.
+  if (root.querySelector("br") && [...root.querySelectorAll("*")].every(element=>["DIV","BR"].includes(element.tagName))) {
+    const wrapper=document.createElement("div");wrapper.append(root.cloneNode(true));
+    const pre=document.createElement("pre");pre.textContent=textWithBreaks(wrapper);
+    return plainHistory(html,pre);
+  }
   const styles=[...root.querySelectorAll("style")].map(style=>style.outerHTML).join("");
   markFlatHeaders(root);
   const queue=extract(root);

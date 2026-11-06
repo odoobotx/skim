@@ -40,6 +40,21 @@ const STYLE_ALLOWED: &[&str] = &[
     "border-bottom",
     "border-left",
     "border-right",
+    "border-width",
+    "border-style",
+    "border-color",
+    "border-top-width",
+    "border-top-style",
+    "border-top-color",
+    "border-bottom-width",
+    "border-bottom-style",
+    "border-bottom-color",
+    "border-left-width",
+    "border-left-style",
+    "border-left-color",
+    "border-right-width",
+    "border-right-style",
+    "border-right-color",
     "border-radius",
     "border-collapse",
     "border-spacing",
@@ -318,9 +333,10 @@ pub fn sanitize_email_html(
                 return None;
             }
             if element == "img" && attribute == "src" {
-                let lower = value.trim().to_lowercase();
-                if let Some(cid) = lower.strip_prefix("cid:") {
-                    return Some(Cow::Owned(cid_url(message_id, cid.trim())));
+                let trimmed = value.trim();
+                let lower = trimmed.to_lowercase();
+                if lower.starts_with("cid:") {
+                    return Some(Cow::Owned(cid_url(message_id, trimmed[4..].trim())));
                 }
                 if lower.starts_with("data:image/") {
                     return Some(Cow::Owned(value.to_string()));
@@ -398,6 +414,15 @@ mod tests {
     }
 
     #[test]
+    fn inline_image_content_ids_keep_their_case() {
+        let cid = "image001.png@01DD6D0B.AEB79E80";
+        let rendered = sanitize_email_html(&format!(r#"<img src="CiD:{cid}">"#), 42, false);
+        assert!(rendered.html.contains(&cid_url(42, cid)));
+        assert!(!rendered.html.contains(&cid_url(42, &cid.to_lowercase())));
+        assert_eq!(rendered.blocked_images, 0);
+    }
+
+    #[test]
     fn embedded_styles_keep_logo_and_message_constraints() {
         let rendered = sanitize_email_html(
             include_str!("../../../tests/fixtures/email-rendering.html"),
@@ -440,6 +465,27 @@ mod tests {
         );
         assert!(rendered.html.contains("background-color:#fff"));
         assert!(rendered.html.contains("color:#111"));
+    }
+
+    #[test]
+    fn table_border_longhands_survive_without_enabling_external_css() {
+        let result = sanitize_email_html(
+            r#"<table style="border-width:1px;border-style:solid;border-color:#aeb8c5;border-collapse:collapse"><tr><td style="border-left-width:1px;border-left-style:solid;border-left-color:#aeb8c5;border-image-source:url(https://tracker.example/x);border-top-color:expression(bad())">Cell</td></tr></table>"#,
+            1,
+            false,
+        );
+        for declaration in [
+            "border-width:1px",
+            "border-style:solid",
+            "border-color:#aeb8c5",
+            "border-left-width:1px",
+            "border-left-style:solid",
+            "border-left-color:#aeb8c5",
+        ] {
+            assert!(result.html.contains(declaration));
+        }
+        assert!(!result.html.contains("tracker.example"));
+        assert!(!result.html.contains("expression"));
     }
 
     #[test]

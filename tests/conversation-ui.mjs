@@ -20,8 +20,7 @@ try {
   const errors=[];page.on("pageerror",error=>errors.push(error.message));
   await page.addInitScript(()=>{localStorage.setItem("skimdemo.taskInbox","on");localStorage.setItem("skimdemo.multiaccount","on");});
   await page.goto("http://localhost:1424");
-  await page.getByRole("button",{name:"Check Inbox",exact:true}).click();
-  await page.locator("section.list button.row").filter({hasText:"Anna Weber"}).first().click();
+  await page.locator('.mail-preview').filter({hasText:'Anna Weber'}).first().click();
   const reader=page.locator(".reading-host"),cards=reader.locator(".conversation-card"),scroll=reader.locator(".scroll"),dock=page.locator(".compose-dock");
   const calls=cmd=>page.evaluate(async cmd=>(await import("/demo/mock/tauri-core.ts")).commandLog.filter(call=>call.cmd===cmd),cmd);
   const atBottom=()=>page.waitForFunction(()=>{const el=document.querySelector(".reading-host .scroll");return el && el.scrollHeight>el.clientHeight && el.scrollHeight-el.clientHeight-el.scrollTop<3;});
@@ -94,6 +93,26 @@ try {
   });
   assert.equal(secondaryDraft.accountId,"acc-2");assert(secondaryDraft.to.includes("tomas.r@gmail.example"));
   await dock.getByRole("button",{name:"Close and save draft",exact:true}).click();await dock.waitFor({state:"hidden"});
+
+  // A concrete message ID from Home/search must not silently disable grouped cards.
+  for(let attempt=0;attempt<2;attempt++) {
+    await page.evaluate(async()=>{
+      const {mail}=await import('/src/lib/stores/mail.svelte.ts');
+      await mail.setGroupThreads(false);mail.selectedThreadId=101;mail.selectedMessageId=1011;
+    });
+    await reader.getByRole('button',{name:'Show quoted history',exact:true}).waitFor();
+    assert.equal(await cards.count(),0,'Flat view targets one message');
+    await reader.getByRole('button',{name:'Show quoted history',exact:true}).click();
+    await reader.locator('.history-card').nth(3).waitFor();
+    assert.equal(await reader.locator('.history-card').count(),4,'Quoted history still uses cards in flat view');
+    const groupedId=await page.evaluate(async()=>{
+      const {mail}=await import('/src/lib/stores/mail.svelte.ts');
+      await mail.setGroupThreads(true);mail.selectedThreadId=101;mail.selectedMessageId=1011;return mail.selectedMessageId;
+    });
+    assert.equal(groupedId,null,'Grouped navigation ignores row-level message IDs');
+    await cards.nth(4).locator('iframe').waitFor();
+    assert.equal(await cards.count(),5,'Reopening retains the full conversation');
+  }
 
   // A long chain loads nearby bodies, keeps position on refresh and follows new mail only at the bottom.
   await reader.getByRole("button",{name:"Back to list",exact:true}).click();

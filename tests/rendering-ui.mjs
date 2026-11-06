@@ -48,6 +48,10 @@ try {
     const url = new URL(route.request().url());
     if (url.hostname === "localhost" && url.port === "1421") return route.continue();
     if (url.hostname === "skim-cid.localhost") {
+      if (/mixed/i.test(url.pathname)) {
+        if (decodeURIComponent(url.pathname)!=='/1/image001.png@Example.Mixed') return route.fulfill({status:404,body:''});
+        return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect width="100" height="50" fill="#4579ae"/></svg>'});
+      }
       const small = url.pathname.endsWith("/small");
       return route.fulfill({ contentType: "image/svg+xml", body:
         `<svg xmlns="http://www.w3.org/2000/svg" width="${small ? 100 : 2104}" height="${small ? 50 : 905}"><rect x="20" y="20" width="600" height="400" rx="60" fill="#e53935"/><text x="20" y="820" font-size="250" fill="black">EXAMPLE</text></svg>` });
@@ -71,6 +75,10 @@ try {
       return doc !== window.__previousRenderingDocument && doc?.body?.childElementCount > 0;
     });
   }
+  await show(sanitize('<p>Embedded image.</p><img src="CiD:image001.png@Example.Mixed" alt="Mixed-case embedded image">').html);
+  await frame.getByAltText('Mixed-case embedded image').waitFor();
+  await page.waitForFunction(()=>{const image=document.querySelector('iframe')?.contentDocument?.querySelector('img');return image?.complete;});
+  assert.equal(await frame.getByAltText('Mixed-case embedded image').evaluate(el=>el.naturalWidth),100,'Inline image IDs must match the cached MIME part exactly');
   await show(sanitized.html);
   assert.notEqual(await frame.locator("body").evaluate(el => getComputedStyle(el).backgroundColor),"rgb(255, 255, 255)","App theme is the default");
   assert.equal(await page.getByLabel("Email appearance",{exact:true}).count(),0,"Appearance is an account setting");
@@ -216,10 +224,39 @@ try {
   const plain=await parse('<pre class="skim-plain">My response.\n\n-- \nAlex\nOn Wednesday, Taylor wrote:\n&gt; Previous text.\n&gt; On Tuesday, Sam wrote:\n&gt; &gt; Original text.</pre>');
   assert(plain.own.includes("-- \nAlex"),"Signatures stay with their own message");
   assert.deepEqual(plain.history.map(q=>q.html),["Previous text.","Original text."]);
+  const plainFixture=await readFile(new URL('./fixtures/plain-replies.txt',import.meta.url),'utf8');
+  const escaped=plainFixture.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+  for(const input of [`<pre class="skim-plain">${escaped}</pre>`,sanitize(`<html><body>${escaped.replaceAll('\n','<br>')}</body></html>`).html]) {
+    const result=await parse(input);
+    assert(result.own.includes("--\nAlex"));
+    assert.deepEqual(result.history.map(q=>q.sender),["Mina","Sam"]);
+    assert(result.history[0].html.includes('Please verify the width'));
+    assert(result.history[1].html.includes('Keep the comparison >= 30 as written.'));
+    assert(!result.history.some(q=>/^\s*>/m.test(q.html)),"Shared quote prefixes are removed within each plain-text reply");
+  }
+  assert.equal((await parse(`<pre class="skim-plain">My reply.\nFrom: ${'x'.repeat(1700)}\nSent: November 4, 2026\nTo: Alex\nUncertain content remains visible.</pre>`)).hasQuoted,false,"Oversized ambiguous headers stay in the original message");
   assert.equal((await parse('<blockquote>Intentional inline quote.</blockquote><p>My thoughts.</p>')).hasQuoted,false);
   assert.equal((await parse('<pre class="skim-plain">On Tuesday, Taylor wrote:\n&gt; Entire message.</pre>')).hasQuoted,false,"A quote-only message remains visible");
   assert.equal((await parse('<img src="data:image/png;base64,AA"><div class="gmail_quote"><p>Quoted text.</p></div>')).hasQuoted,true,"An image-only authored message remains visible");
   await page.evaluate(()=>window.setRenderingConversation(false));
+  await page.evaluate(()=>window.setRenderingAppearance('theme'));
+  const tableFixture=sanitize(await readFile(new URL('./fixtures/email-table.html',import.meta.url),'utf8')).html;
+  await page.setViewportSize({width:1440,height:1000});
+  await show(tableFixture);
+  const table=frame.locator('table').first(),cell=table.locator('td').first();
+  const cellStyle=await cell.evaluate(el=>{const css=getComputedStyle(el);return {border:css.borderTopStyle,width:parseFloat(css.borderTopWidth),padding:css.paddingTop,lineHeight:parseFloat(css.lineHeight)/parseFloat(css.fontSize)}});
+  assert.equal(cellStyle.border,'solid');assert(cellStyle.width>=1);assert.equal(cellStyle.padding,'9px');assert(cellStyle.lineHeight<1.5);
+  assert.equal(await frame.locator('table').last().locator('td').evaluate(el=>parseFloat(getComputedStyle(el).borderTopWidth)),0,"Layout tables remain borderless");
+  await page.screenshot({path:resolve(root,'demo/output/email-table-theme.png')});
+  await page.evaluate(()=>window.setRenderingAppearance('original'));
+  await page.waitForFunction(()=>document.querySelector('iframe')?.contentDocument?.body?.style!==undefined&&getComputedStyle(document.querySelector('iframe').contentDocument.body).backgroundColor==='rgb(255, 255, 255)');
+  assert.equal(await table.locator('th').first().evaluate(el=>getComputedStyle(el).borderTopColor),'rgb(174, 184, 197)',"Original appearance keeps the author's table colors");
+  await page.evaluate(()=>window.setRenderingAppearance('theme'));
+  await page.setViewportSize({width:420,height:850});
+  await page.waitForTimeout(100);
+  assert((await table.boundingBox()).width<=380.1,"Technical identifiers wrap inside narrow table columns");
+  await page.screenshot({path:resolve(root,'demo/output/email-table-narrow.png')});
+  await page.setViewportSize({width:1440,height:1000});
   await show(blocked.html);
   await frame.getByText("Safe text").waitFor();
   assert.equal(await page.evaluate(() => window.__emailScriptRan), undefined);
