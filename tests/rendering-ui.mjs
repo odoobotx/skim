@@ -201,6 +201,18 @@ try {
   const outlook=await parse(sanitize('<p>My reply.</p><div id="divRplyFwdMsg">From: Taylor &lt;taylor@example.com&gt;<br>Sent: Wednesday, November 4, 2026<br>To: Alex</div><p>Outlook history.</p>').html);
   assert.equal(outlook.own,"My reply.");assert.equal(outlook.history[0].html,"Outlook history.");
   assert.equal(outlook.history[0].sender,"Taylor");assert.equal(outlook.history[0].date,"Wednesday, November 4, 2026");
+  const flattened=await parse(sanitize(await readFile(new URL('./fixtures/flattened-replies.html',import.meta.url),'utf8')).html);
+  assert.equal(flattened.own,"Latest reply: the dimensions are confirmed.");
+  assert.deepEqual(flattened.history.map(q=>q.sender),["Alex","Mina","Sam","Taylor"],"Flattened HTML and quote-prefixed paragraphs split into individual replies");
+  for(const [index,word] of ["First","Second","Third","Fourth"].entries()) {
+    assert(flattened.history[index].html.includes(`${word} quoted reply:`));
+    assert.equal((flattened.history[index].html.match(/quoted reply:/g)??[]).length,1,"Each history card contains only that reply");
+  }
+  assert(flattened.history[3].html.includes("30 inches"),"Tables remain with the reply that quoted them");
+  const mixed=await parse(sanitize('<p>My reply.</p><div class="gmail_quote"><div class="gmail_attr">On Wednesday, Alex wrote:</div><blockquote><p>Newest quote.</p><div><p>From: Mina &lt;mina@example.com&gt;<br>Sent: Tuesday, November 3, 2026<br>To: Alex</p></div><p>Older quote.</p></blockquote></div>').html);
+  assert.deepEqual(mixed.history.map(q=>q.html),["Newest quote.","Older quote."]);
+  assert.equal((await parse('<p>Current reply.</p><p>From: the workshop<br>Sent: yesterday<br>To: Alex<br>Subject: Notes</p><p>Still my own text.</p>')).hasQuoted,false,"Ordinary prose that resembles a header stays visible");
+  assert.equal((await parse('<p>From: Alex<br>Sent: November 3, 2026<br>To: Mina</p><p>This is the entire email.</p>')).hasQuoted,false,"A header-only forwarded email must not disappear");
   const plain=await parse('<pre class="skim-plain">My response.\n\n-- \nAlex\nOn Wednesday, Taylor wrote:\n&gt; Previous text.\n&gt; On Tuesday, Sam wrote:\n&gt; &gt; Original text.</pre>');
   assert(plain.own.includes("-- \nAlex"),"Signatures stay with their own message");
   assert.deepEqual(plain.history.map(q=>q.html),["Previous text.","Original text."]);

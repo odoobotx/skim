@@ -42,17 +42,23 @@ try {
   const homeControls=[page.getByRole("button",{name:"Check Inbox",exact:true}),page.getByRole("button",{name:"Search mail",exact:true}),page.getByRole("button",{name:"Compose",exact:true}),page.locator(".mail-preview").first()];
   for (const control of homeControls) {
     await control.hover({position:{x:8,y:8}});
-    await page.waitForFunction(el=>el.getAnimations({subtree:true}).some(animation=>animation.playState==="running"),await control.elementHandle());
-    const origin=await control.evaluate(el=>({x:parseFloat(el.style.getPropertyValue("--ripple-x")),y:parseFloat(el.style.getPropertyValue("--ripple-y"))}));
-    assert(origin.x>=0 && origin.x<20 && origin.y>=0 && origin.y<20,"Hover ripple starts near the pointer entry");
+    await page.waitForFunction(el=>parseFloat(el.style.getPropertyValue("--glow-x"))>0,await control.elementHandle());
+    const origin=await control.evaluate(el=>({x:parseFloat(el.style.getPropertyValue("--glow-x")),y:parseFloat(el.style.getPropertyValue("--glow-y"))}));
+    assert(origin.x>=0 && origin.x<20 && origin.y>=0 && origin.y<20,"Glass highlight follows the pointer inside the control");
+    await control.hover({position:{x:28,y:20}});
+    await page.waitForFunction(el=>parseFloat(el.style.getPropertyValue("--glow-x"))>20,await control.elementHandle());
     await page.waitForFunction(el=>el.getAnimations({subtree:true}).every(animation=>animation.playState!=="running"),await control.elementHandle());
-    assert.equal(await control.evaluate(el=>getComputedStyle(el,"::after").opacity),"0","The ripple settles while the pointer stays over the control");
+    const glow=await control.evaluate(el=>({opacity:Number(getComputedStyle(el,"::after").opacity),animation:getComputedStyle(el,"::after").animationName}));
+    assert(glow.opacity>0 && glow.opacity<=.65);assert.equal(glow.animation,"none","Hover has no expanding ring or repeating animation");
+    await page.mouse.move(0,0);
+    await page.waitForFunction(el=>Number(getComputedStyle(el,"::after").opacity)===0,await control.elementHandle());
   }
   assert.equal(await page.locator(".mail-preview").first().evaluate(el=>getComputedStyle(el).transform),"none","Hover does not move or indent unread rows");
   await page.emulateMedia({reducedMotion:"reduce"});
   for (const control of homeControls) {
     await control.hover();
-    assert.equal(await control.evaluate(el=>el.getAnimations({subtree:true}).filter(animation=>animation.playState==="running").length),0,"Reduced motion disables the ripple and hover movement");
+    assert.equal(await control.evaluate(el=>el.getAnimations({subtree:true}).filter(animation=>animation.playState==="running").length),0,"Reduced motion disables moving highlights and hover movement");
+    assert.equal(await control.evaluate(el=>getComputedStyle(el,"::after").display),"none");
     assert.equal(await control.evaluate(el=>getComputedStyle(el).transform),"none");
     await control.focus();
     await page.keyboard.press("Tab");

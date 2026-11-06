@@ -224,16 +224,14 @@ pub fn run() {
                 .unwrap_or_else(|| "en".into());
             setup_tray(app.handle(), &locale)?;
 
-            // Autostart is on by default. The registry entry is reconciled
-            // with the stored preference on every launch — the uninstaller
-            // removes the Run key, so a reinstall must recreate it.
+            // Restore login startup only when the user explicitly enabled it.
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let wanted = db
                     .with(|conn| db::queries::get_setting(conn, "autostart"))
                     .ok()
                     .flatten()
-                    .is_none_or(|v| v == "1");
+                    .is_some_and(|v| v == "1");
                 let autolaunch = app.autolaunch();
                 match (wanted, autolaunch.is_enabled().unwrap_or(false)) {
                     (true, false) => {

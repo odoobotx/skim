@@ -12,14 +12,15 @@ const outlookSelector = '[data-skim-quote="outlook"],#divRplyFwdMsg';
 function textWithBreaks(element: Element): string {
   const copy=element.cloneNode(true) as Element;
   for (const br of copy.querySelectorAll("br")) br.replaceWith("\n");
+  for (const block of copy.querySelectorAll("p,div,li,tr")) block.append("\n");
   return (copy.textContent ?? "").replace(/\u00a0/g," ").trim();
 }
 
 function header(text: string): Omit<QuotedMessage,"html"> {
-  const attribution=text.replace(/[ \t]+/g," ").trim();
+  const attribution=text.replace(/(^|\n)\s*(?:>\s*)+/g,"$1").replace(/[ \t]+/g," ").trim();
   const on=attribution.replace(/\s+/g," ").match(/^On (.+) wrote:\s*$/i);
-  const from=attribution.match(/\bFrom:\s*(.*?)(?=\n|\bSent:|\bDate:|\bTo:|$)/i);
-  const sent=attribution.match(/\b(?:Sent|Date):\s*(.*?)(?=\n|\bTo:|\bSubject:|$)/i);
+  const from=attribution.match(/\bFrom\s*:\s*(.*?)(?=\n|\bSent\s*:|\bDate\s*:|\bTo\s*:|$)/i);
+  const sent=attribution.match(/\b(?:Sent|Date)\s*:\s*(.*?)(?=\n|\bTo\s*:|\bSubject\s*:|$)/i);
   const parts=on?.[1].match(/^(.*),\s*([^,]+)$/);
   const sender=(parts?.[2] ?? from?.[1] ?? "").replace(/\s*<[^<>]+>\s*$/,"").trim();
   return {sender:sender || null,date:parts?.[1]?.trim() || sent?.[1]?.trim() || null,attribution};
@@ -45,6 +46,43 @@ function precedingAttribution(quote: Element): Element | null {
 
 interface QuoteSeed { content: DocumentFragment; attribution: string; }
 
+const headerLine=/^(?:From|Sent|Date|To|Cc|Bcc|Subject)\s*:/i;
+function headerLines(element: Element): string[] {
+  return textWithBreaks(element).split("\n").map(line=>line.replace(/^\s*(?:>\s*)+/,"").trim()).filter(Boolean);
+}
+function isMailHeader(lines: string[]): boolean {
+  return lines.length>=3 && /^From\s*:/i.test(lines[0]) && lines.every(line=>headerLine.test(line)) &&
+    lines.some(line=>/^(?:Sent|Date)\s*:.*\d/i.test(line)) && lines.some(line=>/^(?:To|Subject)\s*:/i.test(line));
+}
+
+/** Outlook often flattens every older reply into sibling paragraphs, without quote tags. */
+function markFlatHeaders(root: DocumentFragment): void {
+  for (const element of [...root.querySelectorAll("p,div")].reverse()) {
+    if (!root.contains(element) || element.closest(`${outlookSelector},${attributionSelector}`)) continue;
+    if ((element.textContent ?? "").length>1600) continue;
+    const text=textWithBreaks(element);
+    if (text.length>1600) continue;
+    let lines=headerLines(element), marker=element;
+    if (!isMailHeader(lines) && lines.length===1 && /^From\s*:/i.test(lines[0])) {
+      const siblings: Element[]=[];
+      let next=element.nextElementSibling;
+      while (next && siblings.length<8) {
+        const more=headerLines(next);
+        if (textWithBreaks(next).length>1600 || more.some(line=>!headerLine.test(line) || /^From\s*:/i.test(line))) break;
+        siblings.push(next);lines=lines.concat(more);next=next.nextElementSibling;
+      }
+      if (isMailHeader(lines)) {
+        marker=document.createElement("div");element.before(marker);marker.append(element,...siblings);
+      }
+    }
+    if (!isMailHeader(lines) && !/^On\s+.+\s+wrote:\s*$/is.test(lines.join(" "))) continue;
+    // Include redundant header wrappers, but never consume the body or its images.
+    while (marker.parentElement?.tagName==="DIV" && !marker.parentElement.matches(`${historySelector},${attributionSelector}`) &&
+      textWithBreaks(marker.parentElement)===textWithBreaks(marker) && !marker.parentElement.querySelector("img,hr,table")) marker=marker.parentElement;
+    marker.setAttribute("data-skim-quote","outlook");
+  }
+}
+
 /** Remove recognizable history blocks; ordinary inline quotes stay put. */
 function extract(root: DocumentFragment): QuoteSeed[] {
   for (const marker of root.querySelectorAll(outlookSelector)) {
@@ -54,7 +92,7 @@ function extract(root: DocumentFragment): QuoteSeed[] {
     let node: ChildNode | null=marker;
     while (node) {const next: ChildNode | null=node.nextSibling;wrapper.append(node);node=next;}
     marker.removeAttribute("id");
-    marker.setAttribute("data-skim-quote",textWithBreaks(marker).length<1000 ? "attribution" : "unparsed");
+    marker.setAttribute("data-skim-quote",textWithBreaks(marker).length<=1600 ? "attribution" : "unparsed");
   }
   const candidates=[...root.querySelectorAll(`${historySelector},blockquote`)]
     .filter(element=>element.matches(historySelector) || precedingAttribution(element));
@@ -110,6 +148,7 @@ export function withoutQuotedHistory(html: string): {html:string;hasQuoted:boole
   const root=template.content, plain=root.querySelector("pre.skim-plain");
   if (plain && root.childElementCount===1 && root.firstElementChild===plain) return plainHistory(html,plain);
   const styles=[...root.querySelectorAll("style")].map(style=>style.outerHTML).join("");
+  markFlatHeaders(root);
   const queue=extract(root);
   if (!queue.length || !hasContent(root)) return {html,hasQuoted:false,history:[]};
   const own=serialize(root), history:QuotedMessage[]=[];
