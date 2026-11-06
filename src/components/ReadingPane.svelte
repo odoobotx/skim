@@ -798,7 +798,7 @@
               <HtmlViewer
                 html={body.html}
                 appearance={mail.emailAppearanceFor(message.accountId)}
-                trimQuotes={conversation && (detail?.messages.length ?? 0)>1}
+                trimQuotes
                 security={body.security?.links}
                 onHoverUrl={(u) => (hoverUrl = u)}
                 onInteract={() => interact(message.id)}
@@ -811,7 +811,7 @@
           <HtmlViewer
             html={body.html}
                 appearance={mail.emailAppearanceFor(message.accountId)}
-                trimQuotes={conversation && (detail?.messages.length ?? 0)>1}
+            trimQuotes
             security={body.security?.links}
             onHoverUrl={(u) => (hoverUrl = u)}
             onInteract={() => interact(message.id)}

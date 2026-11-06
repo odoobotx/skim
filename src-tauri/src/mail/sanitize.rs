@@ -40,6 +40,21 @@ const STYLE_ALLOWED: &[&str] = &[
     "border-bottom",
     "border-left",
     "border-right",
+    "border-width",
+    "border-style",
+    "border-color",
+    "border-top-width",
+    "border-top-style",
+    "border-top-color",
+    "border-bottom-width",
+    "border-bottom-style",
+    "border-bottom-color",
+    "border-left-width",
+    "border-left-style",
+    "border-left-color",
+    "border-right-width",
+    "border-right-style",
+    "border-right-color",
     "border-radius",
     "border-collapse",
     "border-spacing",
@@ -440,6 +455,27 @@ mod tests {
         );
         assert!(rendered.html.contains("background-color:#fff"));
         assert!(rendered.html.contains("color:#111"));
+    }
+
+    #[test]
+    fn table_border_longhands_survive_without_enabling_external_css() {
+        let result = sanitize_email_html(
+            r#"<table style="border-width:1px;border-style:solid;border-color:#aeb8c5;border-collapse:collapse"><tr><td style="border-left-width:1px;border-left-style:solid;border-left-color:#aeb8c5;border-image-source:url(https://tracker.example/x);border-top-color:expression(bad())">Cell</td></tr></table>"#,
+            1,
+            false,
+        );
+        for declaration in [
+            "border-width:1px",
+            "border-style:solid",
+            "border-color:#aeb8c5",
+            "border-left-width:1px",
+            "border-left-style:solid",
+            "border-left-color:#aeb8c5",
+        ] {
+            assert!(result.html.contains(declaration));
+        }
+        assert!(!result.html.contains("tracker.example"));
+        assert!(!result.html.contains("expression"));
     }
 
     #[test]

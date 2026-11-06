@@ -564,7 +564,7 @@ export const mail = {
     return state.selectedMessageId;
   },
   set selectedMessageId(id: number | null) {
-    state.selectedMessageId = id;
+    state.selectedMessageId = state.groupThreads ? null : id;
   },
   get groupThreads() {
     return state.groupThreads;

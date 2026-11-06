@@ -10,6 +10,7 @@ export function buildEmailDocument(body: string, dark: boolean, original: boolea
           link: "#8ab4f8",
           quoteBorder: "#3a3a42",
           quoteText: "#a3a3ab",
+          tableBorder: "#6f7c90",
         }
       : {
           scheme: "light",
@@ -18,6 +19,7 @@ export function buildEmailDocument(body: string, dark: boolean, original: boolea
           link: "#1a56c4",
           quoteBorder: "#dddddd",
           quoteText: "#555555",
+          tableBorder: "#b8c0cc",
         };
     return `<!doctype html><html><head>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src skim-cid: http://skim-cid.localhost data: https: http:; style-src 'unsafe-inline'">
@@ -41,13 +43,16 @@ export function buildEmailDocument(body: string, dark: boolean, original: boolea
   img { max-width: 100%; height: auto; object-fit: contain; }
   img[src=""] { display: none; }
   a { color: ${colors.link}; }
-  table { max-width: 100%; }
+  table { max-width: 100%; font: inherit; }
   blockquote { margin: 8px 0 8px 2px; padding-left: 12px; border-left: 2px solid ${colors.quoteBorder}; color: ${colors.quoteText}; }
   pre.skim-plain { white-space: pre-wrap; font: inherit; margin: 0; }
   ${original ? "" : `
   body * { color: inherit !important; background: transparent !important; border-color: ${colors.quoteBorder} !important; }
   body a { color: ${colors.link} !important; }
   body img { background: #ffffff !important; }
+  body table { line-height: 1.45; }
+  body table, body th, body td { border-color: ${colors.tableBorder} !important; }
+  body th, body td { overflow-wrap: anywhere; }
   `}
 </style></head><body>${body}</body></html>`;
   }
