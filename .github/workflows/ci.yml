@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main, feature/task-inbox]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -77,12 +78,12 @@ jobs:
           path: src-tauri/target/debug/examples/render_email.exe
           if-no-files-found: ignore
 
-      - name: Build Windows preview installer
+      - name: Build Windows installer
         run: npm run tauri -- build --bundles nsis
 
-      - name: Save Windows preview installer
+      - name: Save Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: skim-tasks-windows-preview
+          name: skim-windows-installer
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error

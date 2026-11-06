@@ -618,6 +618,21 @@ try {
   await homePage.getByText("No New Emails",{exact:true}).waitFor();
   await homePage.screenshot({path:new URL("../demo/output/home-no-new.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
   await homePage.close();
+  const scenePage=await browser.newPage({viewport:{width:1280,height:900},timezoneId:"America/Chicago"});
+  scenePage.on("pageerror",error=>errors.push(error.message));
+  await scenePage.clock.setFixedTime(new Date("2026-11-06T06:35:00-06:00"));
+  await scenePage.goto("http://localhost:1421");
+  for(const [hour,id,image,greeting] of [[6,"dawn","home-nature.png","Good morning."],[9,"morning","home-morning.png","Good morning."],[15,"afternoon","home-afternoon.png","Good afternoon."],[19,"evening","home-evening.png","Good evening."],[22,"night","home-night.png","Good night."]]) {
+    await scenePage.clock.setFixedTime(new Date(`2026-11-06T${String(hour).padStart(2,"0")}:35:00-06:00`));
+    await scenePage.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    await scenePage.waitForFunction(id=>document.querySelector(".home")?.getAttribute("data-scene")===id,id);
+    await scenePage.getByRole("heading",{name:greeting,exact:true}).waitFor();
+    assert((await scenePage.locator(".home").evaluate(el=>getComputedStyle(el).backgroundImage)).includes(image));
+    const response=await scenePage.request.get(`http://localhost:1421/${image}`);
+    assert.equal(response.status(),200,`${id} background is bundled and available offline`);
+  }
+  await scenePage.screenshot({path:new URL("../demo/output/home-night-live.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
+  await scenePage.close();
   assert.deepEqual(errors, []);
   console.log("Inbox UI passed: unread alignment, mixed date sections, section/group Done, reader Back/Done and E, Home, sidebar, sender drill-down, Show Done, sweep batching, failure recovery, Priority and unified Sent.");
 } finally {
