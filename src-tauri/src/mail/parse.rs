@@ -135,6 +135,13 @@ pub fn parse_headers(
         }
     }
 
+    msg.list_id = parsed.header_raw("List-Id").map(|s| s.trim().to_string());
+    msg.auto_submitted = parsed
+        .header_raw("Auto-Submitted")
+        .map(|s| s.trim().to_lowercase());
+    msg.precedence = parsed
+        .header_raw("Precedence")
+        .map(|s| s.trim().to_lowercase());
     msg
 }
 

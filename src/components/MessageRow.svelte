@@ -9,17 +9,30 @@
     checked = false,
     onselect,
     ontoggle,
+    ondone,
+    ondonepointer,
+    completing = false,
+    oncontextmenu,
+    onpriority,
+    priority = thread.priorityOverride ?? false,
   }: {
     thread: ThreadRow;
     selected?: boolean;
     checked?: boolean;
     onselect?: (id: number) => void;
     ontoggle?: (extend: boolean) => void;
+    ondone?: () => void;
+    ondonepointer?: (event: PointerEvent) => void;
+    completing?: boolean;
+    oncontextmenu?: (event: MouseEvent) => void;
+    onpriority?: () => void;
+    priority?: boolean;
   } = $props();
 
   // Which mailbox this row came from — shown only in the unified view, where
   // rows from every account interleave.
   const badge = $derived(mail.unified ? mail.accountBadge(thread.accountId) : null);
+  const initials = $derived(thread.fromName.split(/\s+/).filter(Boolean).slice(0, 2).map(word => Array.from(word)[0]).join("").toUpperCase());
 
   function formatDate(unix: number): string {
     const locale = getLocale();
@@ -39,7 +52,18 @@
      nest inside a button. It sits at the end of the date line, where the row
      already has slack — a leading column would indent the subject and snippet
      on every row forever, to pay for something wanted only now and then. -->
-<div class="row-wrap" class:unread={!thread.isRead} class:selected class:checked>
+<div class="row-wrap" class:unread={!thread.isRead} class:selected class:checked class:completed={thread.isDone || completing}>
+  {#if ondone}
+    <button class="done-check" data-done-ids={thread.messageId ?? thread.id} aria-label={thread.isDone ? "Mark Undone" : "Mark Done"}
+      aria-pressed={thread.isDone || completing} onpointerdown={ondonepointer}
+      onclick={(event) => { if (event.detail === 0) ondone?.(); }}>✓</button>
+  {/if}
+  {#if onpriority}
+    <button class="priority-check" class:active={priority} aria-pressed={priority ?? false}
+      aria-label={priority ? "Remove message Priority" : "Mark message Priority"} title={priority ? "Remove message Priority" : "Mark message Priority"} onclick={onpriority}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill={priority ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M9.5 1.5L3 9h4l-.5 5.5L13 6H9l.5-4.5z" /></svg>
+    </button>
+  {/if}
   <button
     class="check"
     aria-label={t("select.toggle")}
@@ -50,14 +74,15 @@
       <path d="M1.5 5.2l2.4 2.4L8.5 2.6" />
     </svg>
   </button>
-  <button class="row" onclick={() => onselect?.(thread.id)}>
+  <button class="row" onclick={() => onselect?.(thread.id)} {oncontextmenu}>
+    {#if !thread.isRead}<span class="unread-dot" aria-hidden="true"></span>{/if}
     <div class="line1">
       <span class="from">
-        {#if !thread.isRead}<span class="unread-dot"></span>{/if}
+        <span class="sender-avatar" aria-hidden="true">{initials || "?"}</span>
         {#if badge}
-          <span class="acct" style:background="var(--acct-{badge.color})">{badge.letter}</span>
+          <span class="acct" title={badge.title} aria-label={badge.title} style:background="var(--acct-{badge.color})">{badge.letter}</span>
         {/if}
-        {thread.fromName}
+        <span class="sender-name">{thread.fromName}</span>
         {#if thread.messageCount > 1}<span class="mcount">{thread.messageCount}</span>{/if}
       </span>
       <span class="date">{formatDate(thread.date)}</span>
@@ -71,6 +96,19 @@
 </div>
 
 <style>
+  .priority-check { position:absolute; right:68px; top:50%; transform:translateY(-50%); width:25px; height:28px; display:grid; place-items:center; border-radius:7px; opacity:0; color:var(--text-dim); }
+  .row-wrap:hover .priority-check,.priority-check:focus-visible,.priority-check.active { opacity:1; }
+  .priority-check:hover { background:var(--hover); }
+  .priority-check.active { color:var(--accent); }
+  @media(hover:none) { .priority-check { opacity:1; } }
+  .sender-avatar { width:26px; height:26px; border-radius:50%; flex-shrink:0; display:grid; place-items:center; font-size:9px; font-weight:600; color:var(--text-dim); background:color-mix(in srgb,var(--accent) 10%,var(--bg)); border:1px solid color-mix(in srgb,var(--accent) 18%,transparent); }
+  .sender-name { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .done-check { position:absolute; left:8px; top:25px; transform:translateY(-50%); z-index:2; width:26px; height:28px; display:grid; place-items:center; border-radius:8px; opacity:0; color:var(--text-dim); touch-action:none; transition:opacity 120ms,background 120ms; }
+  .row-wrap:hover .done-check, .row-wrap:focus-within .done-check, .completed .done-check { opacity:1; }
+  .done-check:hover { background:color-mix(in srgb,var(--accent) 16%,transparent); color:var(--accent); }
+  .row-wrap:has(.done-check):is(:hover,:focus-within) .unread-dot { opacity:0; }
+  .completed .row { opacity:.48; }
+  @media(hover:none) { .done-check { opacity:1; } .row-wrap:has(.done-check) .unread-dot { opacity:0; } }
   /* Only a positioning context for the checkbox: the row button below still
      draws the whole row, so its height and hairline are untouched. */
   .row-wrap {
@@ -81,9 +119,9 @@
     display: block;
     width: 100%;
     text-align: left;
-    padding: 12px 16px;
+    padding: 12px 16px 12px 42px;
     border-bottom: 1px solid var(--hairline);
-    transition: background 0.08s;
+    transition: background 120ms;
   }
   /* Hover lives on the wrapper: the checkbox sits outside the button, and
      pointing at it must not drop the row's tint. */
@@ -101,8 +139,9 @@
      is simply set in from the edge — so revealing the box shifts nothing. */
   .check {
     position: absolute;
-    top: 13px;
-    right: 16px;
+    top: 50%;
+    transform:translateY(-50%);
+    right: 42px;
     width: 13px;
     height: 13px;
     border: 1px solid var(--text-faint);
@@ -130,13 +169,6 @@
     color: var(--surface);
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .row,
-    .check {
-      transition: none;
-    }
-  }
-
   .line1 {
     display: flex;
     justify-content: space-between;
@@ -144,7 +176,7 @@
     gap: 8px;
     /* Keeps the date clear of the checkbox slot. Only this line is set in —
        the subject and snippet still run the full width of the row. */
-    padding-right: 21px;
+    padding-right: 82px;
   }
   .from {
     font-size: 13.5px;
@@ -155,19 +187,26 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    font-weight: 500;
   }
   .unread .from {
     color: var(--text);
-    font-weight: 700;
+    font-weight: 600;
   }
   .unread-dot {
-    width: 7px;
-    height: 7px;
+    position: absolute;
+    left: 18px;
+    top: 25px;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
-    background: var(--text);
-    flex-shrink: 0;
+    background: var(--accent);
+    transition: opacity 120ms;
+    pointer-events: none;
   }
   .mcount {
+    flex-shrink: 0;
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-faint);
@@ -179,9 +218,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
+    min-width: 23px;
+    padding: 0 3px;
+    height: 16px;
+    border-radius: 4px;
     font-family: var(--font-mono);
     font-size: 9px;
     font-weight: 600;
@@ -219,6 +259,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row, .check, .done-check, .unread-dot { transition: none; }
   }
 
 </style>

@@ -4,6 +4,7 @@ pub mod draft_attachments;
 pub mod drafts;
 pub mod models;
 pub mod queries;
+pub mod tasks;
 
 use crate::error::{Result, SkimError};
 use rusqlite::Connection;
@@ -27,6 +28,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0014_thread_folder_index.sql"),
     include_str!("migrations/0015_account_imap_user.sql"),
     include_str!("migrations/0016_redecode_cjk.sql"),
+    include_str!("migrations/0017_task_inbox.sql"),
+    include_str!("migrations/0018_message_priority.sql"),
 ];
 
 /// A read the user is waiting on has this long to answer before it is worth
@@ -293,7 +296,8 @@ mod tests {
     #[test]
     fn mojibake_folders_are_marked_for_a_resync() {
         let mut conn = Connection::open_in_memory().unwrap();
-        let (before, redecode) = MIGRATIONS.split_at(MIGRATIONS.len() - 1);
+        // Exercise migration 0016 even when newer migrations follow it.
+        let (before, following) = MIGRATIONS.split_at(15);
         migrate(&mut conn, before).unwrap();
         conn.execute_batch(
             "INSERT INTO accounts (id, email, provider, imap_host, smtp_host, created_at)
@@ -308,7 +312,7 @@ mod tests {
         )
         .unwrap();
         let mut all = before.to_vec();
-        all.extend_from_slice(redecode);
+        all.extend_from_slice(following);
         migrate(&mut conn, &all).unwrap();
 
         let state = |id: i64| -> (Option<i64>, Option<i64>) {

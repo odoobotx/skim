@@ -42,6 +42,11 @@ export interface Folder {
 }
 
 export interface ThreadRow {
+  priorityOverride?: boolean | null;
+  priorityAt?: number;
+  isDone?: boolean;
+  pendingMove?: boolean;
+  category?: "mail" | "notifications" | "newsletters";
   id: number;
   /** Set only in flat (ungrouped) mode: the specific message this row is. */
   messageId?: number | null;
@@ -65,6 +70,7 @@ export interface Address {
 
 export interface MessageMeta {
   id: number;
+  accountId: string;
   folderId: number;
   threadId: number | null;
   subject: string;
@@ -201,7 +207,7 @@ export interface SkimError {
 }
 
 /** Theme is two independent axes: temperature × lightness. */
-export type Temperature = "cold" | "warm";
+export type Temperature = "cold" | "warm" | "moonlit";
 export type Lightness = "light" | "dark";
 /** Persisted theme value, e.g. "warm-light". */
 export type Theme = `${Temperature}-${Lightness}`;

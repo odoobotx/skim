@@ -1,6 +1,6 @@
 [package]
 name = "skim"
-version = "1.0.34"
+version = "1.0.44"
 description = "A fast, minimalist, AI-native email client for Windows"
 authors = ["Skim contributors"]
 license = "MIT"
@@ -47,14 +47,33 @@ futures = "0.3"
 # `full_encoding`: without it GBK/Big5/Shift_JIS/EUC-KR decode as lossy UTF-8 —
 # all of CJK mail turns into U+FFFD. encoding_rs is already linked via lopdf.
 mail-parser = { version = "0.11", features = ["full_encoding"] }
-keyring = { version = "3", features = ["windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 base64 = "0.22"
 url = "2"
 # 0.11 matches the copy lopdf already pulls in — one build of sha2, not two.
 sha2 = "0.11"
 getrandom = "0.3"
+# Already used by Tauri; resolve the same OS data path before AppHandle exists.
+dirs = "6"
+# Tauri already uses this for Windows shell-compatible canonical paths.
+dunce = "1"
 ammonia = "4"
+# Inline embedded email CSS only; never resolve network or filesystem stylesheets.
+css-inline = { version = "0.23.1", default-features = false }
+# Already used by html2text/ammonia; reuse their DOM and CSS token parsers.
+dom_query = { version = "0.27", default-features = false }
+cssparser = "0.37"
+lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
+# default features off: chrono/jiff/time are only for PDF date fields, rayon
+# only parallelizes page ops — none of that serves plain text extraction.
+lopdf = { version = "0.44", default-features = false }
+# Trigram language detection for the reading pane's translate offer. Pure Rust,
+# tables compiled in, no model files. Pinned to ~0.16 on purpose: it shares
+# rusqlite's hashbrown 0.14, where 0.18 would compile a second copy (0.15).
+whatlang = "~0.16"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 tauri-winrt-notification = "0.7"
 # `Win32_NetworkManagement_Dns`: DnsQuery_W for onboarding's MX probe. The system
 # resolver (and its cache) instead of a bundled stub resolver — nothing new to
@@ -66,14 +85,11 @@ windows = { version = "0.61", features = [
   "Win32_NetworkManagement_Dns",
 ] }
 winreg = "0.55"
-lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
-# default features off: chrono/jiff/time are only for PDF date fields, rayon
-# only parallelizes page ops — none of that serves plain text extraction.
-lopdf = { version = "0.44", default-features = false }
-# Trigram language detection for the reading pane's translate offer. Pure Rust,
-# tables compiled in, no model files. Pinned to ~0.16 on purpose: it shares
-# rusqlite's hashbrown 0.14, where 0.18 would compile a second copy (0.15).
-whatlang = "~0.16"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+# Already compiled by Tauri/GTK; use the system resolver for MX records.
+gio = "0.18"
 
 [profile.release]
 opt-level = "s"

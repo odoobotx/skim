@@ -1,11 +1,12 @@
 import { api } from "../api";
-import type { Lightness, Temperature, Theme } from "../types";
+import type { Draft, Lightness, Temperature, Theme } from "../types";
 
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 
 /** AI actions the reading pane exposes to the global keyboard handler. */
 type ReadingAiActions = { ask: () => void; translate: () => void };
 let readingAi: ReadingAiActions | null = null;
+let groupNavigation: { back: () => void; done?: () => void } | null = null;
 
 /** Message currently open in the reading pane. The palette chat reads it once
  * when a session starts; App tracks it to know whether the chat about that
@@ -25,9 +26,10 @@ export type MoveRequest = { rowKeys: number[]; messageIds: number[] };
 export type FolderEdit = { id: number; name: string };
 
 const state = $state({
-  /** Warm (quiet-zine) vs cold (classic) neutrals. */
-  temperature: "warm" as Temperature,
-  lightness: "light" as Lightness,
+  homeOpen: true,
+  /** Palette and light/dark are independent preferences. */
+  temperature: "moonlit" as Temperature,
+  lightness: "dark" as Lightness,
   settingsOpen: false,
   /** AI Recap panel occupies the reading pane while open. */
   recapOpen: false,
@@ -39,18 +41,24 @@ const state = $state({
   movePicker: null as MoveRequest | null,
   /** Open rename/delete dialog, and the folder it acts on. */
   folderEditor: null as FolderEdit | null,
+  composeDrafts: [] as { id: number; title: string }[],
+  activeComposeId: null as number | null,
+  composeExpanded: false,
+  composeMinimized: false,
 });
 
 /** Parse a persisted theme string into the two axes, migrating legacy values.
  *  Legacy (single-axis) values map onto the cold palette so existing users keep
  *  their look; "system" is resolved once against the OS (auto-switching is gone).
- *  Anything unknown/empty falls back to the new default, warm-light. */
+ *  Anything unknown/empty falls back to Moonlit dark. */
 function parseTheme(raw: string | undefined): { temperature: Temperature; lightness: Lightness } {
   switch (raw) {
     case "cold-light":
     case "cold-dark":
     case "warm-light":
-    case "warm-dark": {
+    case "warm-dark":
+    case "moonlit-light":
+    case "moonlit-dark": {
       const [temperature, lightness] = raw.split("-") as [Temperature, Lightness];
       return { temperature, lightness };
     }
@@ -61,7 +69,7 @@ function parseTheme(raw: string | undefined): { temperature: Temperature; lightn
     case "system":
       return { temperature: "cold", lightness: media.matches ? "dark" : "light" };
     default:
-      return { temperature: "warm", lightness: "light" };
+      return { temperature: "moonlit", lightness: "dark" };
   }
 }
 
@@ -78,6 +86,31 @@ function applyTheme() {
 applyTheme();
 
 export const ui = {
+  get composeDrafts() { return state.composeDrafts; },
+  get activeComposeId() { return state.activeComposeId; },
+  get composeExpanded() { return state.composeExpanded; },
+  get composeMinimized() { return state.composeMinimized; },
+  openComposer(draft: Pick<Draft, "id" | "subject">) {
+    if (!state.composeDrafts.some(item => item.id === draft.id)) state.composeDrafts.push({ id: draft.id, title: draft.subject });
+    this.activateComposer(draft.id);
+  },
+  activateComposer(id: number) { state.activeComposeId = id; state.composeMinimized = false; },
+  updateComposer(draft: Draft) {
+    const item = state.composeDrafts.find(item => item.id === draft.id);
+    if (item) item.title = draft.subject;
+  },
+  closeComposer(id: number) {
+    state.composeDrafts = state.composeDrafts.filter(item => item.id !== id);
+    if (state.activeComposeId === id) state.activeComposeId = state.composeDrafts.at(-1)?.id ?? null;
+    if (!state.composeDrafts.length) { state.composeExpanded = false; state.composeMinimized = false; }
+  },
+  toggleComposeExpanded() { state.composeExpanded = !state.composeExpanded; state.composeMinimized = false; },
+  minimizeComposer() { state.composeMinimized = true; state.composeExpanded = false; },
+  get homeOpen() { return state.homeOpen; },
+  showHome() {
+    state.homeOpen = true;
+  },
+  showInbox() { state.homeOpen = false; },
   get temperature() {
     return state.temperature;
   },
@@ -175,6 +208,8 @@ export const ui = {
   setReadingAi(actions: ReadingAiActions | null) {
     readingAi = actions;
   },
+  get groupNavigation() { return groupNavigation; },
+  setGroupNavigation(actions: typeof groupNavigation) { groupNavigation = actions; },
   get openMessageId() {
     return openMessageId;
   },

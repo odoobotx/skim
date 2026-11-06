@@ -42,6 +42,7 @@ export function folderSegments(folder: Pick<Folder, "displayName" | "delimiter">
  *  for a user label — its full path minus the INBOX container, always spelled
  *  with "/" (which is what the user types when creating one). */
 export function folderLabel(folder: Pick<Folder, "role" | "displayName" | "delimiter">): string {
+  if (folder.role === "starred") return "Pinned";
   const key = folder.role ? roleKey[folder.role] : undefined;
   return key ? t(key) : folderSegments(folder).join("/");
 }

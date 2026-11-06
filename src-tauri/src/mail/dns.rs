@@ -1,12 +1,16 @@
 //! The one DNS query Skim makes: the MX lookup that tells onboarding whether a
 //! domain's mail lives at Microsoft. It goes through the system resolver
-//! (`DnsQuery_W`), so it uses the machine's own DNS servers and cache — the
+//! (Windows `DnsQuery_W`, Linux GIO), using the machine's DNS servers and cache. The
 //! address never reaches a third-party resolver, and split-horizon DNS on a
 //! corporate VPN answers with the truth.
 
+#[cfg(target_os = "windows")]
 use std::ffi::c_void;
+#[cfg(target_os = "windows")]
 use std::ptr::NonNull;
+#[cfg(target_os = "windows")]
 use windows::core::HSTRING;
+#[cfg(target_os = "windows")]
 use windows::Win32::NetworkManagement::Dns::{
     DnsFree, DnsFreeRecordList, DnsQuery_W, DNS_QUERY_STANDARD, DNS_RECORDA, DNS_RECORDW,
     DNS_TYPE_MX,
@@ -18,6 +22,7 @@ use windows::Win32::NetworkManagement::Dns::{
 /// Blocking: `DnsQuery_W` has no timeout of its own and a dead resolver can sit
 /// on the call for seconds, so callers run this on `spawn_blocking` under a
 /// `tokio::time::timeout`.
+#[cfg(target_os = "windows")]
 pub fn mx_hosts(domain: &str) -> Vec<String> {
     let name = HSTRING::from(domain);
     let mut out: *mut DNS_RECORDA = std::ptr::null_mut();
@@ -61,4 +66,15 @@ pub fn mx_hosts(domain: &str) -> Vec<String> {
     // the strings above were copied into owned `String`s.
     unsafe { DnsFree(Some(head.as_ptr() as *const c_void), DnsFreeRecordList) };
     hosts
+}
+
+#[cfg(target_os = "linux")]
+pub fn mx_hosts(domain: &str) -> Vec<String> {
+    use gio::prelude::ResolverExt;
+    gio::Resolver::default()
+        .lookup_records(domain, gio::ResolverRecordType::Mx, gio::Cancellable::NONE)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|record| record.get::<(u16, String)>().map(|(_, host)| host))
+        .collect()
 }

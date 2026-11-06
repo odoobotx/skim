@@ -61,7 +61,7 @@
         hint: "Ctrl N",
         run: async () => {
           const draft = await api.createDraft(await mail.composeAccountId());
-          await api.openComposeWindow(draft.id);
+          ui.openComposer(draft);
         },
       },
       {

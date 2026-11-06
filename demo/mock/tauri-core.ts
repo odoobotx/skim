@@ -5,6 +5,20 @@
 // UI runs unchanged in a plain browser, served entirely fake data.
 
 import * as db from "./data";
+import { emitDemo } from "./tauri-event";
+
+// Used only by headless tests, with this synthetic mailbox.
+export const commandLog: { cmd: string; args: any }[] = [];
+const savedSettings: Record<string, string> = JSON.parse(localStorage.getItem("skimdemo.settings") ?? "{}");
+const priorityOff=new Set<number>(JSON.parse(localStorage.getItem("skimdemo.priorityOff") ?? "[]"));
+const priorityTimes:Record<string,number>=JSON.parse(localStorage.getItem("skimdemo.priorityTimes") ?? "{}");
+const priorityRows=new Set<number>(JSON.parse(localStorage.getItem("skimdemo.priority") ?? JSON.stringify(db.DEMO_PRIORITY_IDS)));
+const doneRows = new Set<number>(JSON.parse(localStorage.getItem("skimdemo.done") ?? "[]"));
+const readRows = new Set<number>([...doneRows, ...JSON.parse(localStorage.getItem("skimdemo.read") ?? "[]")]);
+const inboxSeen:Record<string,number> = JSON.parse(localStorage.getItem("skimdemo.inboxSeen") ?? "{}");
+if (localStorage.getItem("skimdemo.taskInbox") === "on") {
+  db.INBOX_THREADS.push({ ...db.INBOX_THREADS[0], id: 109, subject: "A separate conversation with Anna" });
+}
 
 // The app checks `"__TAURI_INTERNALS__" in window` to decide whether to boot
 // (vs. show onboarding). Presence is enough — our aliased invoke does the work.
@@ -22,11 +36,18 @@ const STEP_MS = () => num("skimdemo.stepMs", 650); // tool-step dwell
 // single-account shots stay reproducible.
 const MULTI = () => {
   try {
-    return (globalThis as any).localStorage?.getItem("skimdemo.multiaccount") === "on";
+    return (globalThis as any).localStorage?.getItem("skimdemo.multiaccount") !== "off";
   } catch {
-    return false;
+    return true;
   }
 };
+
+function unreadCounts(): Record<string,number> {
+  const rows=MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row=>({...row,accountId:db.ACCOUNT.id}));
+  const counts:Record<string,number>={};
+  for (const row of rows) if (!row.isRead && !readRows.has(row.id) && !doneRows.has(row.id)) counts[row.accountId]=(counts[row.accountId] ?? 0)+1;
+  return counts;
+}
 
 // ---- AI streaming --------------------------------------------------------
 export class Channel<T = unknown> {
@@ -137,6 +158,8 @@ function handleAi(cmd: string, args: any): void {
 
 // ---- Plain command surface ----------------------------------------------
 export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
+  commandLog.push({ cmd, args });
+  if (commandLog.length > 500) commandLog.shift();
   if (AI_COMMANDS.has(cmd)) {
     handleAi(cmd, args);
     return Promise.resolve(undefined as T);
@@ -149,7 +172,7 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "list_accounts":
       return ok(MULTI() ? [db.ACCOUNT, db.ACCOUNT2] : [db.ACCOUNT]);
     case "inbox_unread_counts":
-      return ok(MULTI() ? { "acc-1": 3, "acc-2": 2 } : { "acc-1": 3 });
+      return ok(unreadCounts());
     case "google_oauth_available":
       return ok(false);
     case "microsoft_oauth_available":
@@ -158,22 +181,26 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       return ok(null);
 
     // settings — the recorder/screenshotter can force a theme via localStorage.
-    // Theme is two-axis ("<cold|warm>-<light|dark>"); warm-light is the app default.
+    // Recorder overrides stay available; fresh previews use the fork's default.
     case "get_settings": {
-      let theme = "warm-light";
+      let theme = "moonlit-dark";
       try {
-        theme = (globalThis as any).localStorage?.getItem("skimdemo.theme") || "warm-light";
+        theme = (globalThis as any).localStorage?.getItem("skimdemo.theme") || "moonlit-dark";
       } catch {}
-      return ok({ locale: "en", theme, images_policy: "ask", group_threads: "on" });
+      return ok({ locale: "en", theme, images_policy: "ask", group_threads: "on", inbox_sender_rules:JSON.stringify(db.DEMO_SENDER_RULES), ...savedSettings });
     }
     case "set_setting":
+      savedSettings[args.key] = args.value;
+      localStorage.setItem("skimdemo.settings", JSON.stringify(savedSettings));
       return ok(undefined);
 
     // mail
     case "list_folders":
-      return ok(MULTI() && args.accountId === "acc-2" ? db.FOLDERS2 : db.FOLDERS);
+      return ok((MULTI() && args.accountId === "acc-2" ? db.FOLDERS2 : db.FOLDERS).map(folder => folder.role === "inbox" ? {...folder,unreadCount:unreadCounts()[folder.accountId] ?? 0} : folder));
     case "list_unified_folders":
-      return ok(db.UNIFIED_FOLDERS);
+      return ok(db.UNIFIED_FOLDERS.map(folder => folder.role === "inbox" ? {...folder,unreadCount:Object.values(unreadCounts()).reduce((a,b)=>a+b,0)} : folder));
+    case "list_pinned":
+      return ok(db.unifiedList("inbox").filter(row => row.isStarred && (!args.accountId || row.accountId === args.accountId)).slice(args.offset,args.offset+args.limit));
     case "list_unified_threads":
     case "list_unified_messages":
       return ok(args.offset > 0 ? [] : db.unifiedList(args.role ?? null));
@@ -186,10 +213,60 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
       const list = db.THREADS_BY_FOLDER[args.folderId] ?? [];
       return ok(args.offset > 0 ? [] : list);
     }
-    case "get_thread":
-      return ok(db.threadDetail(args.threadId));
-    case "get_message_body":
-      return ok(db.renderedBody(args.messageId));
+    case "acknowledge_inbox": {
+      const rows=db.unifiedList("inbox");
+      for (const row of rows) if (!args.accountId || row.accountId===args.accountId) inboxSeen[row.accountId]=Math.max(inboxSeen[row.accountId] ?? 0,row.id);
+      localStorage.setItem("skimdemo.inboxSeen",JSON.stringify(inboxSeen));
+      return ok(undefined);
+    }
+    case "list_recent_unread": {
+      const rows=db.unifiedList("inbox").filter(row=>(!args.accountId || row.accountId===args.accountId) && !doneRows.has(row.id) && !row.isRead && !readRows.has(row.id) && row.id>(inboxSeen[row.accountId] ?? 0));
+      return ok({rows:rows.slice(0,5),total:rows.length});
+    }
+    case "list_task_inbox": {
+      const rows = MULTI() ? db.unifiedList("inbox") : db.INBOX_THREADS.map(row => ({...row, accountId: db.ACCOUNT.id}));
+      return ok([...rows].sort((a,b)=>Number(priorityRows.has(b.id))-Number(priorityRows.has(a.id)) || b.date-a.date).filter(row => (!args.accountId || row.accountId === args.accountId) && (args.showDone || !doneRows.has(row.id)))
+        .map(row => ({...row, isDone: doneRows.has(row.id), isRead:row.isRead || readRows.has(row.id), pendingMove: false,priorityOverride:priorityOff.has(row.id) ? false : priorityRows.has(row.id) ? true : null,priorityAt:priorityTimes[row.id] ?? (priorityRows.has(row.id) ? row.date*1000 : 0),
+          category: db.categoryFor(row.id)}))
+        .slice(args.offset ?? 0, args.offset + args.limit));
+    }
+    case "set_task_priority":
+      if (localStorage.getItem("skimdemo.failPriority") === "on") return Promise.reject(new Error("Synthetic Priority failure"));
+      priorityRows.delete(args.threadId);priorityOff.delete(args.threadId);delete priorityTimes[args.threadId];
+      if (args.priority===true) {priorityRows.add(args.threadId);priorityTimes[args.threadId]=Date.now();}
+      if (args.priority===false) priorityOff.add(args.threadId);
+      localStorage.setItem("skimdemo.priority",JSON.stringify([...priorityRows]));
+      localStorage.setItem("skimdemo.priorityOff",JSON.stringify([...priorityOff]));
+      localStorage.setItem("skimdemo.priorityTimes",JSON.stringify(priorityTimes));
+      return ok(undefined);
+    case "set_tasks_done":
+    case "set_thread_done": {
+      if (localStorage.getItem("skimdemo.failArchive") === "on") return Promise.reject(new Error("Synthetic archive failure"));
+      for (const id of args.threadIds ?? [args.threadId]) {
+        if (args.done) {doneRows.add(id);readRows.add(id);priorityRows.delete(id);priorityOff.delete(id);delete priorityTimes[id];} else doneRows.delete(id);
+      }
+      localStorage.setItem("skimdemo.done", JSON.stringify([...doneRows]));
+      localStorage.setItem("skimdemo.priority",JSON.stringify([...priorityRows]));
+      localStorage.setItem("skimdemo.priorityOff",JSON.stringify([...priorityOff]));
+      localStorage.setItem("skimdemo.priorityTimes",JSON.stringify(priorityTimes));
+      localStorage.setItem("skimdemo.read", JSON.stringify([...readRows]));
+      queueMicrotask(() => emitDemo("folders:updated",{}));
+      return ok(undefined);
+    }
+    case "get_thread": {
+      const detail = db.threadDetail(args.threadId);
+      return ok(detail);
+    }
+    case "get_message_body": {
+      const body=db.renderedBody(args.messageId);
+      if (localStorage.getItem("skimdemo.longEmail") === "on") {
+        body.html=`<p>Long email start</p>${Array.from({length:65},(_,i)=>`<p>Long email paragraph ${i+1}. This content verifies the reading pane scrolls naturally.</p>`).join("")}<p>Long email end</p>`;
+      }
+      return ok(body);
+    }
+    case "archive_messages":
+      if (localStorage.getItem("skimdemo.failArchive") === "on") return Promise.reject(new Error("Synthetic archive failure"));
+      return ok(undefined);
     case "thread_message_ids":
       return ok([args.threadId * 10 + 1]);
     case "thread_message_ids_bulk":
@@ -221,10 +298,22 @@ export function invoke<T = any>(cmd: string, args: any = {}): Promise<T> {
     case "get_reply_template":
       return ok(db.replyTemplate(args.messageId, args.mode));
     case "update_draft":
+      if (localStorage.getItem("skimdemo.failDraftSave") === "on") return Promise.reject(new Error("Synthetic draft save failure"));
       db.updateDraft(args.draft);
+      return ok(undefined);
+    case "save_server_draft":
+      if (localStorage.getItem("skimdemo.failDraftSave") === "on") return Promise.reject(new Error("Synthetic draft save failure"));
+      db.updateDraft(args.draft);
+      return ok(undefined);
+    case "send_draft":
+      if (localStorage.getItem("skimdemo.failSend") === "on") return Promise.reject(new Error("Synthetic send failure"));
       return ok(undefined);
     case "list_draft_attachments":
       return ok([]);
+    case "open_attachment":
+    case "save_attachment":
+      if (localStorage.getItem("skimdemo.failAttachment") === "on") return Promise.reject(new Error("Synthetic attachment unavailable"));
+      return ok(cmd === "save_attachment" ? "saved-attachment.pdf" : undefined);
     case "suggest_addresses":
       return ok([]);
 

@@ -8,7 +8,8 @@
   let {
     value = $bindable(""),
     onchange,
-  }: { value: string; onchange?: () => void } = $props();
+    label,
+  }: { value: string; onchange?: () => void; label?: string } = $props();
 
   let inputEl: HTMLInputElement | undefined = $state();
   let items = $state<AddressSuggestion[]>([]);
@@ -16,6 +17,7 @@
   let active = $state(0);
   let timer: ReturnType<typeof setTimeout> | null = null;
   let seq = 0;
+  export function focus(select = false) { inputEl?.focus({preventScroll:true}); if (select) inputEl?.select(); }
 
   function split(): { head: string; tail: string } {
     const i = value.lastIndexOf(",");
@@ -52,6 +54,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
+    if (e.ctrlKey || e.metaKey || e.isComposing) return;
     if (!open) return;
     switch (e.key) {
       case "ArrowDown":
@@ -77,6 +80,7 @@
 
 <div class="wrap">
   <input
+    aria-label={label}
     bind:this={inputEl}
     bind:value
     oninput={onInput}

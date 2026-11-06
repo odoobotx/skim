@@ -1,21 +1,31 @@
 <script lang="ts">
   // Renders sanitized email HTML inside a sandboxed iframe (no scripts) with
   // a strict CSP. Links open in the system browser; height tracks content.
+  import { buildEmailDocument } from "../lib/email-document";
+  import { withoutQuotedHistory } from "../lib/quoted-history";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ui } from "../lib/stores/ui.svelte";
   import { t } from "../lib/i18n/index.svelte";
+  import { copyText } from "../lib/clipboard";
   import type { LinkFlag } from "../lib/types";
+  import HistoryBody from "./HtmlViewer.svelte";
 
   let {
     html,
     security = null,
     onHoverUrl,
+    appearance = "theme",
+    trimQuotes = false,
+    onInteract,
   }: {
     html: string;
     /** Per-link phishing verdicts from the backend, keyed by raw href. */
     security?: LinkFlag[] | null;
     /** Reports the real destination under the cursor (null = left links). */
     onHoverUrl?: (url: string | null) => void;
+    appearance?: "theme" | "original";
+    trimQuotes?: boolean;
+    onInteract?: () => void;
   } = $props();
 
   let iframe: HTMLIFrameElement | undefined = $state();
@@ -31,6 +41,44 @@
   // the real host and the reason; nothing opens until "Open anyway".
   let gate = $state<{ flag: LinkFlag; x: number; y: number } | null>(null);
   let gateEl: HTMLDivElement | undefined = $state();
+  let selectionMenu = $state<{text:string;x:number;y:number} | null>(null);
+  let copyButton: HTMLButtonElement | undefined = $state();
+  let copyFailed = $state(false);
+  // Reading-pane containment must not offset or clip the viewport-positioned menu.
+  function atWindowRoot(node:HTMLElement) {
+    document.body.append(node);
+    return {destroy:() => node.remove()};
+  }
+  function closeSelectionMenu() { selectionMenu=null;iframe?.focus(); }
+  async function copySelection() {
+    const menu=selectionMenu;
+    if (!menu) return;
+    const copied=await copyText(menu.text);
+    if (selectionMenu !== menu) return;
+    if (copied) closeSelectionMenu();
+    else copyFailed=true;
+  }
+  function selectionMenuKey(event:KeyboardEvent) {
+    event.stopPropagation();
+    if (event.key === "Escape" || event.key === "Tab") {event.preventDefault();closeSelectionMenu();}
+    else if ((event.ctrlKey || event.metaKey) && event.code === "KeyC") {event.preventDefault();void copySelection();}
+    else if (["ArrowUp","ArrowDown","Home","End"].includes(event.key)) event.preventDefault();
+  }
+  $effect(() => {
+    if (!selectionMenu) return;
+    copyButton?.focus();
+    const dismiss=() => selectionMenu=null;
+    window.addEventListener("pointerdown",dismiss);
+    window.addEventListener("scroll",dismiss,true);
+    window.addEventListener("blur",dismiss);
+    window.addEventListener("skim:message-interaction",dismiss);
+    return () => {
+      window.removeEventListener("pointerdown",dismiss);
+      window.removeEventListener("scroll",dismiss,true);
+      window.removeEventListener("blur",dismiss);
+      window.removeEventListener("skim:message-interaction",dismiss);
+    };
+  });
 
   $effect(() => {
     if (!gate) return;
@@ -52,10 +100,12 @@
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("pointerdown", dismiss);
     window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("skim:message-interaction", dismiss);
     return () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("pointerdown", dismiss);
       window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("skim:message-interaction", dismiss);
     };
   });
 
@@ -93,12 +143,12 @@
 
   $effect(() => () => resizeObs?.disconnect());
 
-  // Emails that carry their own colors (inline color/background, bgcolor,
-  // <font color>) assume a light page background they never declare. Honor
-  // that by rendering them on an explicit white canvas even in dark theme —
-  // forcing the dark canvas produced dark-on-dark, invisible text. Plain-text
-  // and colorless emails still follow the app theme.
-  const ownColors = $derived(hasOwnColors(html));
+  let zoom = $state<{ src: string; alt: string } | null>(null);
+  let imageDialog: HTMLDialogElement | undefined = $state();
+  const plainText = $derived(/^<pre class="skim-plain">[\s\S]*<\/pre>$/.test(html));
+  const original = $derived(!plainText && appearance === "original");
+  $effect(() => { void html; zoom = null; });
+  $effect(() => { if (zoom && imageDialog && !imageDialog.open) imageDialog.showModal(); });
   // The iframe document can't see the app's CSS variables, so resolve --surface
   // here and paint it in. Transparency looks like the obvious answer but isn't:
   // under `color-scheme: dark` the UA paints its own opaque canvas and ignores a
@@ -111,75 +161,21 @@
       "#ffffff"
     );
   });
+  let revealQuotes = $state(false);
+  $effect(() => {void html;revealQuotes=false;});
+  const reply=$derived(trimQuotes ? withoutQuotedHistory(html) : {html,hasQuoted:false,history:[]});
   const srcdoc = $derived(
-    buildDoc(html, ui.effective === "dark" && !ownColors, ownColors, surface),
+    buildEmailDocument(reply.html, ui.effective === "dark" && !original, original, surface),
   );
-
-  function hasOwnColors(body: string): boolean {
-    return (
-      /(?:^|[;\s"'])(?:background-color|background|color)\s*:/i.test(body) ||
-      /\bbgcolor\s*=/i.test(body) ||
-      /<font\b[^>]*\bcolor\s*=/i.test(body)
-    );
-  }
-
-  function buildDoc(body: string, dark: boolean, ownColors: boolean, surface: string): string {
-    // The default canvas follows the app theme: it's painted with the live
-    // --surface, so the message blends into the pane in every palette. It used
-    // to be hardcoded (#ffffff / #141418) — those happened to equal cold-light
-    // and cold-dark's surface, so the drift only became visible once the warm
-    // palette landed and every email turned into a mismatched block.
-    //
-    // Emails that bring their own (inline) colors still get an explicit white
-    // page, since that's the background they were written against — the
-    // sanitizer already limits what CSS survives.
-    const colors = dark
-      ? {
-          scheme: "dark",
-          bg: surface,
-          text: "#ececef",
-          link: "#8ab4f8",
-          quoteBorder: "#3a3a42",
-          quoteText: "#a3a3ab",
-        }
-      : {
-          scheme: "light",
-          bg: ownColors ? "#ffffff" : surface,
-          text: "#17171b",
-          link: "#1a56c4",
-          quoteBorder: "#dddddd",
-          quoteText: "#555555",
-        };
-    return `<!doctype html><html><head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http://skim-cid.localhost data: https: http:; style-src 'unsafe-inline'">
-<style>
-  :root { color-scheme: ${colors.scheme}; }
-  /* The background goes on the root too, not just body: the canvas takes its
-     colour from html first, and color-scheme makes the UA paint an opaque
-     default there — which would defeat a transparent body. */
-  html, body { margin: 0; padding: 0; background: ${colors.bg}; }
-  body {
-    /* For the height measurement below, which reads this box: keep the
-       children's margins inside. A first or last child's margin would
-       otherwise collapse out of the body, so the body's height would miss
-       what the document still counts and the frame would come up exactly
-       that margin short, which is a scrollbar on the message. */
-    display: flow-root;
-    font-family: 'Hanken Grotesk', 'Segoe UI', sans-serif;
-    font-size: 14px; line-height: 1.6; color: ${colors.text};
-    word-wrap: break-word; overflow-wrap: break-word;
-  }
-  img { max-width: 100%; height: auto; }
-  img[src=""] { display: none; }
-  a { color: ${colors.link}; }
-  table { max-width: 100%; }
-  blockquote { margin: 8px 0 8px 2px; padding-left: 12px; border-left: 2px solid ${colors.quoteBorder}; color: ${colors.quoteText}; }
-  pre.skim-plain { white-space: pre-wrap; font: inherit; margin: 0; }
-</style></head><body>${body}</body></html>`;
-  }
+  $effect(() => {void srcdoc;selectionMenu=null;});
 
   function setupDoc(doc: Document) {
     observedDoc = doc;
+    const interact = () => {onInteract?.();window.dispatchEvent(new Event("skim:message-interaction"));};
+    doc.addEventListener("pointerdown",interact);
+    doc.addEventListener("focusin",interact);
+    doc.addEventListener("wheel",interact,{passive:true});
+    doc.addEventListener("scroll",interact,true);
     const measure = () => {
       // Fonts and images keep their callbacks alive across a message switch,
       // so one can fire for a document that has already been replaced. Its
@@ -233,16 +229,58 @@
     doc.fonts?.ready.then(measure).catch(() => {});
     // Images loading later change the height.
     for (const img of Array.from(doc.images)) {
+      // Keep smaller sender limits, but never let inline CSS escape the pane.
+      const maxWidth = img.style.maxWidth;
+      img.style.maxWidth = maxWidth && maxWidth !== "none" ? `min(${maxWidth}, 100%)` : "100%";
+      const pixels = (value: string | null) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value)
+        ? parseFloat(value) : 0;
+      const authoredWidth = pixels(img.style.width || img.getAttribute("width"));
+      const authoredHeight = pixels(img.style.height || img.getAttribute("height"));
+      if (authoredWidth && authoredHeight) {
+        img.style.aspectRatio = `${authoredWidth} / ${authoredHeight}`;
+        img.style.height = "auto";
+      } else if (!img.style.width && !img.hasAttribute("width") && authoredHeight) {
+        // Respect height-only logo hints without stretching their native ratio.
+        img.style.maxHeight = `min(${img.style.maxHeight || "100000px"}, ${authoredHeight}px)`;
+        img.style.height = "auto";
+      }
+      if (!img.closest("a") && img.getAttribute("src")) {
+        img.style.cursor = "zoom-in";
+        img.tabIndex = 0;
+        img.setAttribute("role", "button");
+        img.setAttribute("aria-label", t("render.view_image"));
+        img.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            zoom = { src: img.src, alt: img.alt };
+          }
+        });
+      }
       img.addEventListener("load", measure);
       img.addEventListener("error", measure);
     }
-    // The message body is never editable, so kill the WebView2 context menu
-    // here too — the parent document's handler can't reach into the iframe.
-    doc.addEventListener("contextmenu", (e) => e.preventDefault());
+    // Keep native link actions from bypassing the reader's link-safety gate.
+    doc.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      interact();
+      gate=null;
+      const selection=doc.getSelection(), text=selection?.toString();
+      if (!text) {selectionMenu=null;return;}
+      const rect=iframe?.getBoundingClientRect();
+      const range=selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+      const keyboard=e.clientX===0 && e.clientY===0;
+      copyFailed=false;
+      selectionMenu={text,
+        x:Math.max(8,Math.min((rect?.left ?? 0)+(keyboard ? range?.left ?? 0 : e.clientX),window.innerWidth-196)),
+        y:Math.max(8,Math.min((rect?.top ?? 0)+(keyboard ? range?.bottom ?? 0 : e.clientY),window.innerHeight-96))};
+    });
     doc.addEventListener("click", (e) => {
       const target = (e.target as HTMLElement | null)?.closest("a");
       if (!target) {
         gate = null;
+        const img = (e.target as HTMLElement | null)?.closest("img");
+        if (img?.getAttribute("src")) zoom = { src: img.src, alt: img.alt };
         return;
       }
       e.preventDefault();
@@ -274,6 +312,7 @@
     // back is what keeps preventDefault working: Q focuses the Ask input
     // during keydown, and the original "q" would otherwise be typed into it.
     doc.addEventListener("keydown", (e) => {
+      interact();
       if (e.isComposing) return;
       const replay = new KeyboardEvent("keydown", {
         key: e.key,
@@ -287,7 +326,14 @@
         cancelable: true,
       });
       window.dispatchEvent(replay);
-      if (replay.defaultPrevented) e.preventDefault();
+      if (replay.defaultPrevented) {e.preventDefault();return;}
+      // The iframe fits its whole body; keyboard scrolling belongs to the reader.
+      const scroller=iframe?.closest<HTMLElement>(".scroll");
+      if (scroller && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const step=({ArrowDown:40,ArrowUp:-40,PageDown:scroller.clientHeight*.85,PageUp:-scroller.clientHeight*.85," ":scroller.clientHeight*.85*(e.shiftKey ? -1 : 1)} as Record<string,number>)[e.key];
+        if (step !== undefined) {scroller.scrollBy({top:step});e.preventDefault();}
+        else if (e.key === "Home" || e.key === "End") {scroller.scrollTo({top:e.key === "Home" ? 0 : scroller.scrollHeight});e.preventDefault();}
+      }
     });
     // Hover preview: report the real destination to the status bar. Entering
     // anything that isn't a link (or leaving the document) clears it.
@@ -313,16 +359,55 @@
 <iframe
   bind:this={iframe}
   title={t("a11y.message")}
+  loading="lazy"
   sandbox="allow-same-origin"
   srcdoc={srcdoc}
   onload={onLoad}
   style="height: {height}px"
 ></iframe>
+{#if reply.hasQuoted}
+  <button class="quoted-toggle" aria-label={revealQuotes ? "Hide quoted history" : "Show quoted history"} title={revealQuotes ? "Hide history" : "History"}
+    aria-expanded={revealQuotes} onclick={() => {onInteract?.();revealQuotes=!revealQuotes;}}>
+    <svg width="19" height="10" viewBox="0 0 19 10" fill="currentColor" aria-hidden="true"><circle cx="3" cy="5" r="1.5"/><circle cx="9.5" cy="5" r="1.5"/><circle cx="16" cy="5" r="1.5"/></svg>
+    {#if revealQuotes}<span>Hide history</span>{/if}
+  </button>
+  {#if revealQuotes}
+    <ol class="quoted-history" aria-label="Quoted history">
+      {#each reply.history as quoted,index (index)}
+        <li class="history-card">
+          <header class="history-meta"><strong title={quoted.attribution}>{quoted.sender || quoted.attribution || "Quoted message"}</strong>
+            <span class="history-badge">History</span>{#if quoted.date}<span class="history-date">{quoted.date}</span>{/if}
+          </header>
+          <div class="history-body"><HistoryBody html={quoted.html} {appearance} {security} {onHoverUrl} {onInteract} /></div>
+        </li>
+      {/each}
+    </ol>
+  {/if}
+{/if}
+
+{#if selectionMenu}
+  <div use:atWindowRoot class="selection-menu" role="menu" aria-label={t("reading.copy")} tabindex="-1"
+    style:left={`${selectionMenu.x}px`} style:top={`${selectionMenu.y}px`}
+    onpointerdown={(event) => event.stopPropagation()} onkeydown={selectionMenuKey}>
+    <button bind:this={copyButton} role="menuitem" onclick={() => void copySelection()}>{t("reading.copy")}<kbd>Ctrl C</kbd></button>
+    {#if copyFailed}<p role="alert">{t("reading.copy_failed")}</p>{/if}
+  </div>
+{/if}
+
+{#if zoom}
+  <dialog bind:this={imageDialog} class="image-dialog" aria-label={t("render.view_image")}
+    onclose={() => zoom = null} oncancel={() => zoom = null}
+    onkeydown={(event) => event.stopPropagation()}>
+    <button class="image-close" onclick={() => { imageDialog?.close(); zoom = null; }}>{t("render.close_image")}</button>
+    <img src={zoom.src} alt={zoom.alt} />
+  </dialog>
+{/if}
 
 {#if gate}
   <div
     bind:this={gateEl}
     class="gate"
+    use:atWindowRoot
     role="alertdialog"
     aria-label={t("security.link_gate_title", { host: gate.flag.host })}
     tabindex="-1"
@@ -340,6 +425,25 @@
 {/if}
 
 <style>
+  .selection-menu { position:fixed; z-index:200; width:180px; padding:6px; border:1px solid var(--hairline); border-radius:10px; background:var(--surface); color:var(--text); box-shadow:0 12px 40px #0003; }
+  .selection-menu button { display:flex; align-items:center; justify-content:space-between; width:100%; padding:9px 10px; border:0; border-radius:6px; color:inherit; background:none; text-align:left; font:inherit; font-size:12px; cursor:pointer; }
+  .selection-menu button:hover, .selection-menu button:focus-visible { background:var(--hover); outline:2px solid var(--accent); outline-offset:-2px; }
+  .selection-menu kbd { color:var(--text-faint); font:10px var(--font-mono); }
+  .selection-menu p { margin:6px 10px; font-size:11px; color:var(--text-dim); }
+  .quoted-toggle { display:inline-flex; align-items:center; gap:7px; padding:3px 6px; margin-top:8px; min-height:20px; border-radius:6px; font-size:11px; color:var(--text-dim); background:var(--hover); }
+  .quoted-toggle:hover { background:var(--hover); }
+  .quoted-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  .quoted-history { list-style:none; padding:0; margin:12px 0 0; display:grid; gap:10px; }
+  .history-card { min-width:0; border:1px solid var(--hairline-strong); border-radius:10px; overflow:hidden; background:var(--surface); }
+  .history-meta { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; padding:11px 14px; border-bottom:1px solid var(--hairline); font-size:12px; }
+  .history-meta strong { flex:1; min-width:100px; overflow-wrap:anywhere; font-weight:600; }
+  .history-badge { font-size:9px; color:var(--text-faint); padding:1px 5px; border:1px solid var(--hairline); border-radius:4px; }
+  .history-date { max-width:65%; font-size:10px; color:var(--text-dim); }
+  .history-body { padding:12px 14px; }
+  .image-dialog { max-width: 95vw; max-height: 90vh; padding: 16px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; color: #17171b; overflow: auto; }
+  .image-dialog::backdrop { background: #0009; }
+  .image-dialog img { display: block; max-width: 85vw; max-height: 75vh; object-fit: contain; }
+  .image-close { display: block; margin: 0 0 12px auto; font-size: 13px; }
   iframe {
     width: 100%;
     border: none;

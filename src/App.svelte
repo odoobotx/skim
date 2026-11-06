@@ -1,9 +1,12 @@
 <script lang="ts">
   import Titlebar from "./components/Titlebar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
+  import Home from "./components/Home.svelte";
   import MessageList from "./components/MessageList.svelte";
   import ReadingPane from "./components/ReadingPane.svelte";
+  import BackDone from "./components/BackDone.svelte";
   import ComposeForm from "./components/ComposeForm.svelte";
+  import ComposeDock from "./components/ComposeDock.svelte";
   import AiAsk from "./components/AiAsk.svelte";
   import AiRecap from "./components/AiRecap.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
@@ -21,7 +24,6 @@
   import { mail, rowKey, UNIFIED } from "./lib/stores/mail.svelte";
   import { palette } from "./lib/stores/palette.svelte";
   import { ui } from "./lib/stores/ui.svelte";
-  import { updater } from "./lib/stores/update.svelte";
   import type { Account, Draft, ThreadRow } from "./lib/types";
 
   /** How long the boot is given to answer before the shell is drawn anyway.
@@ -41,6 +43,17 @@
   // Opening a message dismisses the recap panel.
   $effect(() => {
     if (mail.selectedThreadId !== null && ui.recapOpen) ui.closeRecap();
+  });
+  let lastInboxVisit: string | null = null;
+  $effect(() => {
+    const account = mail.unified ? null : mail.account?.id ?? null;
+    const visit = mail.booted && !ui.homeOpen && mail.selectedFolder?.role === "inbox"
+      ? `${account ?? "*"}:${mail.selectedFolderId}` : null;
+    if (visit === lastInboxVisit) return;
+    lastInboxVisit = visit;
+    if (visit !== null) {
+      void mail.acknowledgeInbox(account).catch(error => { reportError("home.visit",error);mail.noteError(t("ops.failed")); });
+    }
   });
 
   // ---- AI recap ----
@@ -124,6 +137,12 @@
         if (msgId == null) return;
         const draft = await api.editDraft(msgId);
         if (token !== draftResolveToken) return; // selection moved on
+        if (ui.composeDrafts.some(item => item.id === draft.id)) {
+          ui.activateComposer(draft.id);
+          mail.selectedThreadId = null;
+          mail.selectedMessageId = null;
+          return;
+        }
         draftOrigin = msgId;
         draftEditorId = draft.id;
       } catch {
@@ -179,7 +198,7 @@
         } catch {
           // settings are best-effort at boot
         }
-        updater.init(settings);
+        // Fork updates stay disabled until we have our own signed releases.
         // The shell is drawn whatever the mailbox is doing. `boot()` reads a
         // database the startup sync is busy filling, so it can be slow, and if
         // it throws there is nothing later that would ever set `ready` — either
@@ -212,7 +231,7 @@
   }
 
   function moveSelection(delta: number) {
-    const threads = mail.threads;
+    const threads = mail.navigationRows;
     if (threads.length === 0) return;
     // Rows are keyed by thread in grouped mode, by message in flat mode (where
     // several rows can share a thread id).
@@ -246,6 +265,10 @@
     }
     const thread = mail.selectedThread;
     if (!thread) return;
+    if (action === "archive" && mail.selectedFolder?.role === "inbox") {
+      await mail.setDone(thread, !thread.isDone);
+      return;
+    }
     const ids = await api.threadMessageIds(thread.id);
     if (ids.length === 0) return;
     switch (action) {
@@ -291,15 +314,21 @@
   async function replyToSelected(mode: "reply" | "reply_all" | "forward" = "reply") {
     const thread = mail.selectedThread;
     if (!thread) return;
-    const detail = await api.getThread(thread.id);
-    const latest = detail.messages[detail.messages.length - 1];
-    const draft = await api.getReplyTemplate(latest.id, mode);
-    await api.openComposeWindow(draft.id);
+    const messageId = ui.openMessageId ?? mail.selectedMessageId;
+    try {
+      const detail = await api.getThread(thread.id);
+      if (mail.selectedThreadId !== thread.id) return;
+      const target = detail.messages.find(message => message.id === messageId)
+        ?? detail.messages.slice().sort((a,b) => a.date-b.date || a.id-b.id).at(-1);
+      if (!target) return;
+      const draft = await api.getReplyTemplate(target.id, mode);
+      ui.openComposer(draft);
+    } catch (error) { reportError("reading.reply",error);mail.noteError(t("ops.failed")); }
   }
 
   async function composeNew() {
     const draft = await api.createDraft(await mail.composeAccountId());
-    await api.openComposeWindow(draft.id);
+    ui.openComposer(draft);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -320,6 +349,7 @@
       void composeNew();
       return;
     }
+    if (ui.composeExpanded || (e.target instanceof Element && e.target.closest(".compose-form, .compose-dock"))) return;
     // Ctrl+1 is "All inboxes", Ctrl+2..9 the Nth mailbox — matching the
     // switcher's order (only when several accounts exist).
     if ((e.ctrlKey || e.metaKey) && mail.accounts.length > 1 && /^Digit[1-9]$/.test(e.code)) {
@@ -340,6 +370,7 @@
       e.code === "KeyA" &&
       !isTyping() &&
       !palette.open &&
+      !ui.settingsOpen &&
       !ui.shortcutsOpen &&
       ui.movePicker === null &&
       ui.folderEditor === null &&
@@ -364,6 +395,7 @@
     if (e.key === "Escape" && inlineAsk) return;
     if (
       palette.open ||
+      ui.settingsOpen ||
       ui.shortcutsOpen ||
       ui.movePicker !== null ||
       ui.folderEditor !== null ||
@@ -388,11 +420,20 @@
         moveSelection(-1);
         return;
       case "KeyE":
-        void actOnSelected("archive");
+        if (!mail.selecting && mail.selectedThreadId === null && !ui.recapOpen && ui.groupNavigation) ui.groupNavigation.done?.();
+        else void actOnSelected("archive");
         return;
       case "KeyS":
         void actOnSelected("star");
         return;
+      case "KeyI": {
+        const row = mail.selectedThread;
+        if (!e.repeat && !mail.selecting && row && mail.selectedFolder?.role === "inbox" && !row.isDone) {
+          e.preventDefault();
+          void mail.togglePriority(row).catch(error => { reportError("inbox.priority",error);mail.noteError(t("ops.failed")); });
+        }
+        return;
+      }
       case "KeyU":
         void actOnSelected("unread");
         return;
@@ -458,7 +499,8 @@
         // the first thing Escape takes back.
         if (mail.selecting) mail.clearSelection();
         else if (ui.recapOpen) ui.closeRecap();
-        else mail.selectedThreadId = null;
+        else if (mail.selectedThreadId !== null) { mail.selectedThreadId = null; mail.selectedMessageId = null; }
+        else ui.groupNavigation?.back();
         break;
     }
   }
@@ -466,13 +508,24 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="app">
+<div class="app" class:home-view={ready && !needsOnboarding && ui.homeOpen}>
   <Titlebar />
   {#if ready}
     {#if !needsOnboarding}
       <main class="panes">
+        {#if ui.homeOpen}
+          <Home />
+        {:else}
         <Sidebar />
-        <MessageList />
+        <div class="list-host" class:split={mail.readingLayout === "split"}
+          class:reading-hidden={mail.readingLayout === "full" && (mail.selectedThreadId !== null || ui.recapOpen)}>
+          <MessageList />
+        </div>
+        {#if mail.selectedThreadId !== null || ui.recapOpen || mail.readingLayout === "split"}
+        <div class="reading-host">
+        {#if mail.readingLayout === "full" && ((mail.selectedFolder?.role === "drafts" && draftEditorId !== null) || (ui.recapOpen && mail.selectedThreadId === null))}
+          <div class="reading-nav"><BackDone onback={() => { mail.selectedThreadId = null; mail.selectedMessageId = null; ui.closeRecap(); }} /></div>
+        {/if}
         {#if mail.selectedFolder?.role === "drafts" && draftEditorId !== null}
           {#key draftEditorId}
             <ComposeForm
@@ -494,8 +547,11 @@
               onpopout={() => popOutRecap(recap)}
             />
           {/if}
-        {:else}
+        {:else if mail.selectedThreadId !== null || mail.readingLayout === "split"}
           <ReadingPane />
+        {/if}
+        </div>
+        {/if}
         {/if}
       </main>
       {#if expandedAsk}
@@ -515,6 +571,7 @@
         </div>
       {/if}
       <CommandPalette />
+      <ComposeDock />
       <FolderPicker />
       <FolderEditor />
       {#if ui.shortcutsOpen}
@@ -527,6 +584,15 @@
 </div>
 
 <style>
+  .list-host { display:flex; flex:1; min-width:0; min-height:0; }
+  .list-host.split { flex:0 0 var(--list-w); }
+  .list-host.reading-hidden { display:none; }
+  .reading-host { display:flex; flex-direction:column; flex:1; min-width:0; min-height:0; overflow:hidden; }
+  .reading-nav { padding:12px 24px; border-bottom:1px solid var(--hairline); }
+  .home-view :global(.titlebar) { position:absolute; inset:0 0 auto; z-index:10; background:transparent; border:0; box-shadow:none; }
+  .home-view :global(.titlebar .brand) { visibility:hidden; }
+  .home-view :global(.titlebar .ctl) { color:#fff; }
+  .home-view :global(.titlebar.browser-preview) { display:none; }
   .app {
     height: 100%;
     display: flex;

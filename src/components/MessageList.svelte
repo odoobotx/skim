@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { api, reportError } from "../lib/api";
+  import { parseSenderRules, type SenderRule } from "../lib/inbox";
   import { folderLabel } from "../lib/folders";
   import { t } from "../lib/i18n/index.svelte";
   import { ai } from "../lib/stores/ai.svelte";
@@ -7,6 +10,37 @@
   import { ui } from "../lib/stores/ui.svelte";
   import MessageRow from "./MessageRow.svelte";
   import SelectionBar from "./SelectionBar.svelte";
+  import OrganizedList from "./OrganizedList.svelte";
+
+  const rules = $derived(mail.senderRules);
+  let rulesReady = $state(false);
+  const organized = $derived(["inbox", "sent"].includes(mail.selectedFolder?.role ?? ""));
+  let saveQueue = Promise.resolve();
+
+  onMount(() => {
+    let active = true;
+    void api.getSettings().then(settings => {
+      if (active) mail.senderRules = parseSenderRules(settings.inbox_sender_rules);
+    }).catch(error => {
+      reportError("inbox.rules.load", error);
+      mail.noteError(t("inbox.rules_failed"));
+    }).finally(() => { if (active) rulesReady = true; });
+    return () => { active = false; };
+  });
+
+  function saveRule(address: string, patch: SenderRule): Promise<void> {
+    mail.clearSelection();
+    mail.selectedThreadId = null;
+    mail.selectedMessageId = null;
+    mail.senderRules = { ...rules, [address]: { ...rules[address], ...patch } };
+    const value = JSON.stringify(rules);
+    // Serialize writes so a slow earlier save cannot overwrite a later edit.
+    saveQueue = saveQueue.then(() => api.setSetting("inbox_sender_rules", value)).catch(error => {
+      reportError("inbox.rules.save", error);
+      mail.noteError(t("inbox.rules_failed"));
+    });
+    return saveQueue;
+  }
 
   const title = $derived.by(() => {
     const f = mail.selectedFolder;
@@ -95,7 +129,7 @@
   }
 </script>
 
-<section class="list">
+<section class="list" class:wide={mail.readingLayout === "full" && mail.selectedThreadId === null && !ui.recapOpen}>
   <header class="head">
     {#if mail.selecting}
       <!-- The header becomes the action bar rather than a second strip
@@ -111,21 +145,17 @@
         </button>
       {/if}
       <div class="head-right">
+        {#if mail.selectedFolder?.role === "inbox"}
+          <label class="show-done"><input type="checkbox" role="switch" checked={mail.showDone}
+            onchange={(event) => void mail.setShowDone(event.currentTarget.checked).catch(error => { reportError("inbox.showDone",error); mail.noteError(t("ops.failed")); })} /> Show Done</label>
+        {/if}
         {#if recapAvailable}
           <button class="recap-chip" onclick={openRecap}>✦ {t("ai.recap")}</button>
         {/if}
         {#if unread > 0}
           <span class="microlabel">{t("list.unread", { n: unread })}</span>
         {/if}
-        {#if mail.threads.length > 0}
-          <span class="nav-hint" title="{t('shortcuts.next')} · {t('shortcuts.prev')}">
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3">
-              <path d="M3.5 5L6 2.5 8.5 5" />
-              <path d="M3.5 7L6 9.5 8.5 7" />
-            </svg>
-            <kbd>J</kbd><kbd>K</kbd>
-          </span>
-        {/if}
+
       </div>
     {/if}
   </header>
@@ -144,6 +174,14 @@
           {mail.syncState === "syncing" ? t("sync.syncing") : t("list.empty")}
         {/if}
       </div>
+    {:else if organized}
+      {#if rulesReady}<OrganizedList {rules} {saveRule} />{/if}
+      {#if mail.threads.length >= 100}
+        <button class="load-more" onclick={() => void mail.loadMoreThreads().catch(error => {
+          reportError("inbox.more", error);
+          mail.noteError(t("list.load_failed"));
+        })}>{t("inbox.load_more")}</button>
+      {/if}
     {:else}
       <div class="spacer" style="height: {start * rowH}px"></div>
       {#each visible as thread (thread.messageId ?? thread.id)}
@@ -166,6 +204,33 @@
 </section>
 
 <style>
+  .show-done { display:flex; align-items:center; gap:8px; min-height:32px; font-size:12px; color:var(--text-dim); white-space:nowrap; cursor:pointer; }
+  .show-done input { appearance:none; position:relative; width:32px; height:19px; border:1px solid var(--hairline-strong); border-radius:999px; background:var(--selected); cursor:pointer; transition:background .14s ease,border-color .14s ease; }
+  .show-done input::before { content:""; display:block; position:absolute; left:3px; top:3px; width:11px; height:11px; border-radius:50%; background:var(--text-dim); transition:transform .14s ease,background .14s ease; }
+  .show-done input:checked { background:var(--accent); border-color:var(--accent); }
+  .show-done input:checked::before { transform:translateX(13px); background:var(--on-accent); }
+  .show-done input:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  @media(prefers-reduced-motion:reduce) { .show-done input,.show-done input::before { transition:none; } }
+  .list.wide { width:auto; flex:1; }
+  .list:not(.wide) :global(.row-wrap:has(.priority-check) .subject),
+  .list:not(.wide) :global(.row-wrap:has(.priority-check) .snippet) { padding-right:82px; }
+  .list.wide :global(.row) { display:grid; grid-template-columns:minmax(150px,25%) minmax(120px,1fr) minmax(0,1.7fr) 60px; align-items:center; gap:16px; min-height:48px; padding:8px 106px 8px 42px; border-radius:9px; }
+  .list.wide :global(.line1) { display:contents; }
+  .list.wide :global(.from) { grid-column:1; grid-row:1; }
+  .list.wide :global(.unread-dot), .list.wide :global(.done-check), .list.wide :global(.group-row .group-done) { top:50%; }
+  .list.wide :global(.date) { grid-column:4; grid-row:1; text-align:right; }
+  .list.wide :global(.subject) { grid-column:2; grid-row:1; margin:0; }
+  .list.wide :global(.snippet) { grid-column:3; grid-row:1; margin:0; }
+  .list.wide :global(.summary) { display:grid; grid-template-columns:minmax(150px,25%) minmax(0,1fr) 60px; align-items:center; gap:16px; min-height:50px; padding:8px 106px 8px 42px; }
+  .list.wide :global(.summary .preview) { margin:0; }
+  .list.wide :global(.summary .arrow) { position:absolute; right:12px; top:50%; transform:translateY(-50%); }
+  @media(max-width:1000px) {
+    .list.wide :global(.row) { grid-template-columns:minmax(120px,30%) minmax(0,1fr) 54px; gap:12px; }
+    .list.wide :global(.snippet) { display:none; }
+    .list.wide :global(.date) { grid-column:3; }
+    .list.wide :global(.summary) { grid-template-columns:minmax(120px,30%) minmax(0,1fr); gap:12px; }
+    .list.wide :global(.summary .unread) { display:none; }
+  }
   .list {
     width: var(--list-w);
     flex-shrink: 0;
@@ -219,18 +284,6 @@
       transition: none;
     }
   }
-  .nav-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    color: var(--text-faint);
-    flex-shrink: 0;
-  }
-  .nav-hint kbd {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-faint);
-  }
   /* Violet — an AI moment */
   .recap-chip {
     padding: 4px 11px;
@@ -266,6 +319,7 @@
     overflow-y: auto;
     flex: 1;
   }
+  .load-more { width: 100%; padding: 16px; color: var(--text-dim); font-size: 12px; }
   .empty {
     padding: 48px 16px;
     text-align: center;

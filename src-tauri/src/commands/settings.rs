@@ -12,8 +12,15 @@ const ALLOWED: &[&str] = &[
     "images_policy",
     "notifications",
     "group_threads",
+    "inbox_sender_rules",
+    "inbox_show_done",
+    "reading_layouts",
+    "email_appearances",
+    "sent_copy_modes",
     "last_from_account",
     "sidebar_collapsed",
+    "sidebar_unified_groups",
+    "sidebar_pinned",
     "autostart",
     "ai_model",
     "ai_provider",
@@ -80,9 +87,12 @@ pub async fn set_setting(state: State<'_, AppState>, key: String, value: String)
 /// where they can clear it, rather than describing a path through Control Panel.
 #[tauri::command]
 pub fn open_credential_manager() -> Result<()> {
+    #[cfg(target_os = "windows")]
     std::process::Command::new("control.exe")
         .args(["/name", "Microsoft.CredentialManager"])
         .spawn()?;
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("seahorse").spawn()?;
     Ok(())
 }
 

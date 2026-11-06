@@ -14,11 +14,10 @@ use state::AppState;
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 
-/// Roaming app-data dir (`%APPDATA%\com.skim.app`) — the same place Tauri's
-/// `app_data_dir()` resolves to on Windows, computed without an `AppHandle` so
-/// the panic hook can reach it before setup runs.
+/// The same OS data directory as Tauri, without an AppHandle so the panic hook
+/// can reach it before setup runs.
 fn app_data_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("com.skim.app"))
+    dirs::data_dir().map(|p| p.join("com.techsystech.skimtasks"))
 }
 
 /// Past this a diagnostic log is old news; the file is started over rather than
@@ -90,8 +89,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // A protocol-activated toast click relaunches Skim with a
-            // `skim://…` argument, forwarded here to the running instance.
-            if let Some(uri) = args.iter().find(|a| a.starts_with("skim://")) {
+            // `skimtasks://…` argument, forwarded here to the running instance.
+            if let Some(uri) = args.iter().find(|a| a.starts_with("skimtasks://")) {
                 notify::handle_skim_uri(app, uri, true);
             } else {
                 // A plain second launch surfaces the running instance (it may
@@ -210,8 +209,11 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir).ok();
-            notify::register_aumid();
-            notify::register_url_scheme();
+            #[cfg(target_os = "windows")]
+            {
+                notify::register_aumid();
+                notify::register_url_scheme();
+            }
             let db = db::Db::open(&data_dir.join("skim.db"))?;
             app.manage(AppState::new(db.clone(), data_dir.clone()));
 
@@ -222,16 +224,14 @@ pub fn run() {
                 .unwrap_or_else(|| "en".into());
             setup_tray(app.handle(), &locale)?;
 
-            // Autostart is on by default. The registry entry is reconciled
-            // with the stored preference on every launch — the uninstaller
-            // removes the Run key, so a reinstall must recreate it.
+            // Restore login startup only when the user explicitly enabled it.
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let wanted = db
                     .with(|conn| db::queries::get_setting(conn, "autostart"))
                     .ok()
                     .flatten()
-                    .is_none_or(|v| v == "1");
+                    .is_some_and(|v| v == "1");
                 let autolaunch = app.autolaunch();
                 match (wanted, autolaunch.is_enabled().unwrap_or(false)) {
                     (true, false) => {
@@ -274,7 +274,7 @@ pub fn run() {
             // Cold start from a toast click: stash the target so the frontend
             // opens it once its listeners attach (via take_pending_open). The
             // running-app case goes through the single-instance handler above.
-            if let Some(uri) = std::env::args().find(|a| a.starts_with("skim://")) {
+            if let Some(uri) = std::env::args().find(|a| a.starts_with("skimtasks://")) {
                 notify::handle_skim_uri(app.handle(), &uri, false);
             }
 
@@ -338,8 +338,15 @@ pub fn run() {
             commands::mail::list_folders,
             commands::mail::folder_account_id,
             commands::mail::list_threads,
+            commands::mail::list_task_inbox,
+            commands::mail::list_recent_unread,
+            commands::mail::acknowledge_inbox,
+            commands::mail::set_thread_done,
+            commands::mail::set_tasks_done,
+            commands::mail::set_task_priority,
             commands::mail::list_messages,
             commands::mail::list_unified_folders,
+            commands::mail::list_pinned,
             commands::mail::list_unified_threads,
             commands::mail::list_unified_messages,
             commands::mail::folder_ref,
@@ -456,7 +463,7 @@ fn setup_tray(app: &tauri::AppHandle, locale: &str) -> tauri::Result<()> {
         .icon(app.default_window_icon().expect("bundled icon").clone())
         .tooltip("Skim")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(cfg!(target_os = "linux"))
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
             "quit" => app.exit(0),

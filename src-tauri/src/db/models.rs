@@ -78,6 +78,7 @@ pub struct ThreadRow {
 #[serde(rename_all = "camelCase")]
 pub struct MessageMeta {
     pub id: i64,
+    pub account_id: String,
     pub folder_id: i64,
     pub thread_id: Option<i64>,
     pub subject: String,
@@ -210,6 +211,9 @@ pub struct RenderedBody {
 /// Headers of a message as parsed from the wire, ready for insertion.
 #[derive(Debug, Clone, Default)]
 pub struct NewMessage {
+    pub list_id: Option<String>,
+    pub auto_submitted: Option<String>,
+    pub precedence: Option<String>,
     pub account_id: String,
     pub folder_id: i64,
     pub uid: u32,

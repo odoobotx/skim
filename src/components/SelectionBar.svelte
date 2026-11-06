@@ -9,7 +9,7 @@
   // IMAP cannot MOVE between accounts, so a mixed selection has no valid
   // destination — say why rather than opening a picker that must come up empty.
   const crossAccount = $derived(mail.selectionSpansAccounts);
-  const allLoaded = $derived(count > 0 && count === mail.threads.length);
+  const allLoaded = $derived(count > 0 && count === mail.navigationRows.length);
 </script>
 
 <div class="bar">

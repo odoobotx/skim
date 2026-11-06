@@ -187,6 +187,7 @@ pub async fn open_invite_ics(
     tokio::fs::copy(&path, &ics)
         .await
         .map_err(|e| SkimError::other("io", e.to_string()))?;
+    let ics = super::file_for_external_app(ics)?;
     app.opener()
         .open_path(ics.to_string_lossy().into_owned(), None::<&str>)
         .map_err(|e| SkimError::other("io", e.to_string()))

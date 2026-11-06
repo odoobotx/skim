@@ -20,6 +20,15 @@ pub fn insert_message(
 ) -> rusqlite::Result<Option<(i64, i64)>> {
     let tx = conn.transaction()?;
 
+    if let Some((id, thread)) = super::tasks::adopt(&tx, msg)? {
+        tx.execute(
+            "UPDATE messages SET list_id=?2,auto_submitted=?3,precedence=?4 WHERE id=?1",
+            params![id, msg.list_id, msg.auto_submitted, msg.precedence],
+        )?;
+        tx.commit()?;
+        return Ok(Some((id, thread)));
+    }
+
     let exists: bool = tx
         .prepare_cached("SELECT 1 FROM messages WHERE folder_id = ?1 AND uid = ?2")?
         .exists(params![msg.folder_id, msg.uid])?;
@@ -81,6 +90,10 @@ pub fn insert_message(
         msg.auth_dmarc,
     ])?;
     let message_pk = tx.last_insert_rowid();
+    tx.execute(
+        "UPDATE messages SET list_id=?2,auto_submitted=?3,precedence=?4 WHERE id=?1",
+        params![message_pk, msg.list_id, msg.auto_submitted, msg.precedence],
+    )?;
 
     {
         let mut stmt =
@@ -398,6 +411,63 @@ const UNIFIED_SEL: &str = "SELECT id FROM folders
      WHERE (?1 IS NOT NULL AND role = ?1)
         OR (?1 IS NULL AND role IS NULL AND display_name = ?2 COLLATE NOCASE)";
 
+/// A flag-based view works even when the server has no special Starred folder.
+pub fn list_pinned(
+    conn: &Connection,
+    account: Option<&str>,
+    grouped: bool,
+    offset: i64,
+    limit: i64,
+) -> rusqlite::Result<Vec<ThreadRow>> {
+    let mut stmt = conn.prepare_cached(
+        "WITH copies AS (
+           SELECT m.*, ROW_NUMBER() OVER (
+             PARTITION BY m.account_id, CASE WHEN m.message_id IS NOT NULL THEN 'mid:'||m.message_id ELSE 'id:'||m.id END
+             ORDER BY CASE f.role WHEN 'inbox' THEN 0 WHEN 'all' THEN 2 ELSE 1 END, m.id DESC
+           ) AS copy_rank
+           FROM messages m JOIN folders f ON f.id=m.folder_id
+           WHERE m.is_starred=1 AND (?1 IS NULL OR m.account_id=?1)
+             AND COALESCE(f.role,'') NOT IN ('trash','junk')
+             AND NOT EXISTS (SELECT 1 FROM messages gone JOIN folders gf ON gf.id=gone.folder_id
+               WHERE gone.account_id=m.account_id AND gone.message_id=m.message_id AND gf.role IN ('trash','junk'))
+         ), ranked AS (
+           SELECT *, ROW_NUMBER() OVER (
+             PARTITION BY CASE WHEN ?2 THEN thread_id ELSE id END ORDER BY date DESC,id DESC
+           ) AS pin_rank, MIN(is_read) OVER (
+             PARTITION BY CASE WHEN ?2 THEN thread_id ELSE id END
+           ) AS all_read
+           FROM copies WHERE copy_rank=1
+         )
+         SELECT m.thread_id,m.id,m.account_id,m.from_name,m.from_addr,m.subject,m.snippet,
+                m.date,m.all_read,m.has_attachments,CASE WHEN ?2 THEN t.message_count ELSE 1 END
+         FROM ranked m JOIN threads t ON t.id=m.thread_id WHERE pin_rank=1
+         ORDER BY m.date DESC,m.id DESC LIMIT ?3 OFFSET ?4",
+    )?;
+    let rows = stmt
+        .query_map(params![account, grouped, limit, offset], |r| {
+            let addr = r.get::<_, Option<String>>(4)?.unwrap_or_default();
+            Ok(ThreadRow {
+                id: r.get(0)?,
+                message_id: if grouped { None } else { Some(r.get(1)?) },
+                account_id: r.get(2)?,
+                from_name: r
+                    .get::<_, Option<String>>(3)?
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| addr.clone()),
+                from_addr: addr,
+                subject: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                snippet: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                date: r.get(7)?,
+                is_read: r.get(8)?,
+                is_starred: true,
+                has_attachments: r.get(9)?,
+                message_count: r.get(10)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Threads visible in a virtual folder (all accounts), newest first. Threads
 /// never span accounts, so this interleaves per-account threads by date.
 pub fn list_unified_threads(
@@ -606,6 +676,40 @@ mod tests {
             m2.contains("idx_messages_thread_folder"),
             "m2 must seek the thread index, got: {m2}"
         );
+    }
+
+    #[test]
+    fn pinned_view_scopes_accounts_deduplicates_copies_and_excludes_trash() {
+        Db::open_in_memory().unwrap().with(|conn| {
+            seed(conn)?;
+            let inbox = folder_id(conn, "a1", "INBOX");
+            let other = folder_id(conn, "a2", "INBOX");
+            let archive = folder_id(conn, "a1", "Receipts");
+            conn.execute("INSERT INTO folders (account_id,imap_name,role,display_name) VALUES ('a1','Trash','trash','Trash')", [])?;
+            let trash = conn.last_insert_rowid();
+            add_message(conn, "a1", inbox, 1, "Keep this", 10, false);
+            add_message(conn, "a1", archive, 1, "Keep this", 10, false);
+            add_message(conn, "a1", archive, 2, "Archived pin", 20, true);
+            add_message(conn, "a1", trash, 3, "Deleted pin", 30, false);
+            add_message(conn, "a1", archive, 3, "Deleted pin", 30, false);
+            add_message(conn, "a2", other, 1, "Other account", 40, false);
+            add_message(conn, "a1", inbox, 4, "Unpinned", 50, false);
+            conn.execute("UPDATE messages SET is_starred=1 WHERE uid!=4", [])?;
+            let unified = list_pinned(conn, None, true, 0, 100)?;
+            assert_eq!(unified.len(), 3);
+            assert_eq!(unified[0].account_id, "a2");
+            assert!(unified.iter().all(|r| r.is_starred && r.message_id.is_none()));
+            let scoped = list_pinned(conn, Some("a1"), false, 0, 100)?;
+            assert_eq!(scoped.len(), 2);
+            assert_eq!(scoped[0].subject, "Archived pin");
+            assert!(scoped[0].is_read);
+            assert!(scoped.iter().all(|r| r.account_id == "a1" && r.message_id.is_some()));
+            assert_eq!(list_pinned(conn, None, true, 1, 1)?[0].id, scoped[0].id);
+            conn.execute("UPDATE messages SET is_starred=0 WHERE account_id='a1'", [])?;
+            assert!(list_pinned(conn, Some("a1"), true, 0, 100)?.is_empty());
+            assert_eq!(list_pinned(conn, None, false, 0, 100)?.len(), 1);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]

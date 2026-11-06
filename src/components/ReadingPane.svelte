@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { aiErrorText, aiStream, api, errorMessage } from "../lib/api";
+  import { aiErrorText, aiStream, api, errorMessage, reportError } from "../lib/api";
   import { getLocale, t } from "../lib/i18n/index.svelte";
+  import { isPriority } from "../lib/inbox";
   import { ai } from "../lib/stores/ai.svelte";
   import { aiSessions } from "../lib/stores/aiSession.svelte";
   import { mail } from "../lib/stores/mail.svelte";
@@ -8,6 +9,7 @@
   import type { MessageMeta, RenderedBody, ThreadDetail } from "../lib/types";
   import AiAsk from "./AiAsk.svelte";
   import AttachmentChips from "./AttachmentChips.svelte";
+  import BackDone from "./BackDone.svelte";
   import CopyAffordance from "./CopyAffordance.svelte";
   import HtmlViewer from "./HtmlViewer.svelte";
   import InviteCard from "./InviteCard.svelte";
@@ -63,14 +65,11 @@
   type Translating = { current: number; total: number } | { error: string };
   let translating = $state<Record<number, Translating>>({});
   let loadedFor = $state<string | null>(null);
-  // The focused (fully open) message in the conversation. Reply/AI actions
-  // target it; newer messages collapse above it, older ones below. Defaults to
-  // the latest-in-folder message on thread load.
+  // The active card supplies keyboard/AI context; every card stays expanded.
   let focusedId = $state<number | null>(null);
-  // Accordion open state for the two collapsed sections around the focused one.
-  let laterOpen = $state(false);
-  let earlierOpen = $state(false);
-  let focusedEl = $state<HTMLDivElement | undefined>();
+  let following = true;
+  let threadRequest = 0;
+  let replying = $state<number[]>([]);
 
   // The newest message of the thread IN THE CURRENT FOLDER — the default focus,
   // the flat-view fallback, and the read/loadKey anchor.
@@ -92,13 +91,6 @@
     return msgs.find((m) => m.id === focusedId) ?? latest;
   });
 
-  // Whole thread, newest first. Split around the focused message: `newer` sits
-  // collapsed above it ("later in thread"), `older` collapsed below ("earlier").
-  const ordered = $derived.by(() => [...(detail?.messages ?? [])].reverse());
-  const focusIdx = $derived(ordered.findIndex((m) => m.id === focused?.id));
-  const newer = $derived(focusIdx < 0 ? [] : ordered.slice(0, focusIdx));
-  const older = $derived(focusIdx < 0 ? [] : ordered.slice(focusIdx + 1));
-
   // The single message shown when not in conversation view: the one picked from
   // a flat list, else the newest in folder.
   const shown = $derived.by(() => {
@@ -109,12 +101,6 @@
     return latest;
   });
 
-  // A message is outgoing if it's from the account owner (his own reply). The
-  // unified view owns every connected address.
-  function isOutgoing(m: MessageMeta): boolean {
-    return mail.myEmails.includes(m.from.addr.toLowerCase());
-  }
-
   // The message reply/AI actions target: focused in conversation, else shown.
   const replyTarget = $derived(conversation ? focused : shown);
 
@@ -123,6 +109,7 @@
   // The message list keeps the original — it is an index, and recognizing a
   // message there beats reading it.
   const shownSubject = $derived.by(() => {
+    if (conversation) return detail?.subject || "—";
     const id = replyTarget?.id;
     const body = id != null ? bodies[id] : undefined;
     const translate = typeof body === "object" ? body.translate : null;
@@ -174,8 +161,7 @@
 
   // Reply-all only makes sense with more than one other party (sender + other
   // recipients besides me). With a single correspondent it equals Reply.
-  const canReplyAll = $derived.by(() => {
-    const m = replyTarget;
+  function canReplyAll(m: MessageMeta | null) {
     if (!m) return false;
     const mine = mail.myEmails;
     const others = new Set<string>();
@@ -184,26 +170,61 @@
       if (addr && !mine.includes(addr)) others.add(addr);
     }
     return others.size > 1;
-  });
+  }
 
   // Open a different message from the chain. The AI target follows, so the dock
   // shows that message's chat (usually none, until it is asked something).
   function setFocus(id: number) {
-    if (id === focusedId) return;
     focusedId = id;
+    ui.setOpenMessage(id);
+  }
+
+  function interact(id: number) { following = false; setFocus(id); }
+
+  function watchMessage(node: HTMLElement, id: number) {
+    const observer = new IntersectionObserver(entries => {
+      if (!entries.some(entry => entry.isIntersecting)) return;
+      if (bodies[id] === undefined && detail?.messages.some(message => message.id === id)) void loadBody(id);
+      observer.disconnect();
+    }, {root: node.closest(".scroll"), rootMargin: "500px"});
+    observer.observe(node);
+    return {destroy: () => observer.disconnect()};
+  }
+
+  function followConversation(node: HTMLElement) {
+    const scroll = node.closest<HTMLElement>(".scroll")!;
+    following = true;
+    const bottom = () => {
+      if (following) scroll.scrollTop = scroll.scrollHeight;
+    };
+    const moved = () => {
+      if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 24) following = true;
+    };
+    // Content shrinking can also lower scrollTop; only user input pauses following.
+    const pause = () => { following = false; };
+    const key = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof Element && event.target.closest("input,textarea,[contenteditable]"))) return;
+      if (["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(event.key)) pause();
+    };
+    const observer = new ResizeObserver(bottom);
+    observer.observe(node); observer.observe(scroll);
+    scroll.addEventListener("scroll", moved);
+    scroll.addEventListener("wheel", pause, {passive:true});
+    scroll.addEventListener("pointerdown", pause);
+    scroll.addEventListener("touchstart", pause, {passive:true});
+    window.addEventListener("keydown", key);
+    bottom();
+    return {destroy: () => {
+      observer.disconnect();scroll.removeEventListener("scroll",moved);scroll.removeEventListener("wheel",pause);
+      scroll.removeEventListener("pointerdown",pause);scroll.removeEventListener("touchstart",pause);window.removeEventListener("keydown",key);
+    }};
   }
 
   // Fetch on demand the body of the open message (focused in conversation view,
-  // or the single shown message in flat view). Collapsed rows need only snippets.
+  // or the single shown message in flat view). Other cards load near the viewport.
   $effect(() => {
     const m = conversation ? focused : shown;
     if (m && bodies[m.id] === undefined) void loadBody(m.id);
-  });
-
-  // Keep the open message in view when navigating the chain.
-  $effect(() => {
-    void focusedId;
-    if (conversation) focusedEl?.scrollIntoView({ block: "nearest" });
   });
 
   // Expose the AI actions to the global keyboard handler (Q, T) in App.svelte.
@@ -235,7 +256,7 @@
     const id = mail.selectedThreadId;
     if (id === null) return null;
     const row = mail.selectedThread;
-    return `${id}:${row?.messageCount ?? 0}:${row?.date ?? 0}`;
+    return `${id}:${row?.messageCount ?? 0}:${row?.date ?? 0}:${row?.pendingMove ?? false}`;
   });
 
   $effect(() => {
@@ -251,11 +272,15 @@
   });
 
   async function loadThread(threadId: number) {
-    detail = null;
-    bodies = {};
-    bodyErrors = {};
-    bodyReq.clear();
-    viewOpts = {};
+    const request = ++threadRequest;
+    const refreshing = detail?.id === threadId;
+    if (!refreshing) {
+      detail = null;
+      bodies = {};
+      bodyErrors = {};
+      bodyReq.clear();
+      viewOpts = {};
+    }
     // `translating` is NOT reset: a translation still being generated belongs to
     // its message, not to this pane, and clearing it here would offer to start a
     // second one for the same message on the way back.
@@ -263,27 +288,24 @@
     // follows whichever message the pane settles on.
     try {
       const d = await api.getThread(threadId);
-      if (mail.selectedThreadId !== threadId) return;
+      if (mail.selectedThreadId !== threadId || request !== threadRequest) return;
+      d.messages.sort((a,b) => a.date-b.date || a.id-b.id);
       detail = d;
-      // Focus the latest-in-folder message (the one just opened). Newer messages
-      // collapse above it, older ones below; a side's accordion opens by default
-      // only when it hides unread mail. Body loading follows `focused`/`shown`.
       const msgs = d.messages;
       const inFolder = msgs.filter((m) => m.folderId === mail.selectedFolderId);
-      const topId = (inFolder.length ? inFolder[inFolder.length - 1] : msgs[msgs.length - 1])?.id ?? null;
-      focusedId = topId;
-      const orderedNow = [...msgs].reverse();
-      const idx = orderedNow.findIndex((m) => m.id === topId);
-      laterOpen = idx > 0 && orderedNow.slice(0, idx).some((m) => !m.isRead);
-      earlierOpen = idx >= 0 && orderedNow.slice(idx + 1).some((m) => !m.isRead);
+      if (!refreshing || following || !msgs.some(message => message.id === focusedId)) {
+        focusedId = (conversation ? msgs[msgs.length - 1] : inFolder.length ? inFolder[inFolder.length - 1] : msgs[msgs.length - 1])?.id ?? null;
+      }
 
       const unread = d.messages.filter((m) => !m.isRead).map((m) => m.id);
       if (unread.length > 0) {
         mail.patchThreadRow(threadId, { isRead: true });
         void api.markRead(unread, true);
       }
-    } catch {
-      detail = null;
+    } catch (error) {
+      if (request !== threadRequest || mail.selectedThreadId !== threadId) return;
+      reportError("reading.thread",error);
+      mail.noteError(t("ops.failed"));
     }
   }
 
@@ -395,9 +417,40 @@
   // true while the pane is shown.
   const anyStarred = $derived(mail.selectedThread?.isStarred ?? false);
   const isRead = $derived(mail.selectedThread?.isRead ?? true);
+  const inInbox = $derived(mail.selectedFolder?.role === "inbox");
+  const priorityMarked = $derived(mail.selectedThread ? isPriority(mail.selectedThread,mail.senderRules) : false);
+  async function togglePriority() {
+    const row = mail.selectedThread;
+    if (!row || !inInbox || row.isDone) return;
+    try { await mail.togglePriority(row); }
+    catch(error) { reportError("inbox.priority",error);mail.noteError(t("ops.failed")); }
+  }
+  let completing = $state(false);
+
+  function backToList() {
+    mail.selectedThreadId = null;
+    mail.selectedMessageId = null;
+    ui.closeRecap();
+  }
 
   function archive() {
-    if (!detail) return;
+    if (!detail || completing) return;
+    if (inInbox) {
+      completing = true;
+      const row = mail.selectedThread;
+      // Home/search can open a thread outside the currently paged list.
+      const completion = row ? mail.setDone(row, !row.isDone)
+        : api.setThreadDone(detail.id, mail.selectedMessageId, true).then(async () => {
+          mail.selectedThreadId = null;
+          mail.selectedMessageId = null;
+          await mail.refreshThreads();
+        });
+      void completion.catch(error => {
+        reportError("inbox.done", error);
+        mail.noteError(t("ops.failed"));
+      }).finally(() => { completing = false; });
+      return;
+    }
     const threadId = detail.id;
     const ids = allIds;
     mail.removeThreadFromList(threadId);
@@ -462,16 +515,20 @@
     });
   }
 
-  async function reply(mode: "reply" | "reply_all" | "forward") {
-    const target = replyTarget;
-    if (!target) return;
-    const draft = await api.getReplyTemplate(target.id, mode);
-    await api.openComposeWindow(draft.id);
+  async function reply(mode: "reply" | "reply_all" | "forward", target = replyTarget) {
+    if (!target || replying.includes(target.id)) return;
+    replying = [...replying,target.id];
+    try {
+      const draft = await api.getReplyTemplate(target.id, mode);
+      ui.openComposer(draft);
+    } catch (error) { reportError("reading.reply",error);mail.noteError(t("ops.failed")); }
+    finally { replying = replying.filter(id => id !== target.id); }
   }
 </script>
 
 <section class="pane">
   {#if !detail}
+    {#if mail.readingLayout === "full" && mail.selectedThreadId !== null}<header class="toolbar"><BackDone onback={backToList} /></header>{/if}
     {#if ui.temperature === "warm" && mail.selectedThreadId === null}
       <!-- Quiet-zine empty state: a taped paper note. Warm themes only. -->
       <div class="placeholder">
@@ -504,15 +561,32 @@
       <div class="placeholder">
         <div class="ghost">✉</div>
         {mail.selectedThreadId === null ? t("reading.no_selection") : t("reading.loading")}
+        {#if mail.selectedThreadId === null && mail.navigationRows.length > 0}
+          <span class="browse-hint"><kbd>J</kbd><kbd>K</kbd><span>{t("reading.navigation_hint")}</span></span>
+        {/if}
       </div>
     {/if}
   {:else}
     <header class="toolbar">
+      {#if inInbox || mail.readingLayout === "full"}
+        <BackDone onback={mail.readingLayout === "full" ? backToList : undefined} ondone={inInbox ? archive : undefined} done={mail.selectedThread?.isDone ?? false} disabled={completing} />
+      {/if}
+      {#if inInbox && mail.selectedThread && !mail.selectedThread.isDone}
+        <button class="tool priority-action" class:active={priorityMarked} aria-pressed={priorityMarked}
+          aria-label={t(priorityMarked ? "reading.remove_priority" : "reading.priority")}
+          title={`${t(priorityMarked ? "reading.remove_priority" : "reading.priority")} (I)`}
+          disabled={mail.priorityPending(mail.selectedThread)} onclick={() => void togglePriority()}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill={priorityMarked ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 1.5L3 9h4l-.5 5.5L13 6H9l.5-4.5z" /></svg>
+        </button>
+      {/if}
+      {#if mail.navigationRows.length > 1 && mail.navigationRows.some(row => row.id === mail.selectedThreadId)}
+        <span class="browse-hint" title={`${t("shortcuts.next")} · ${t("shortcuts.prev")}`}><kbd>J</kbd><kbd>K</kbd><span>{t("reading.navigation_hint")}</span></span>
+      {/if}
       <div class="spacer"></div>
-      <button class="tool" onclick={archive} title={t("reading.archive")}>
+      {#if !inInbox}<button class="tool" onclick={archive} title={t("reading.archive")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h12v3H2V3zm1 3v7h10V6M6.5 9h3" /></svg>
         <kbd>E</kbd>
-      </button>
+      </button>{/if}
       <button class="tool" onclick={remove} title={t("reading.delete")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.5 9.5h6l.5-9.5M6.7 6.5v5M9.3 6.5v5" /></svg>
         <kbd>Del</kbd>
@@ -543,58 +617,20 @@
       </button>
     </header>
 
-    <div class="scroll">
-      <div class="subject-row copy-host">
+      <div class="subject-row copy-host reader-subject">
         <h1 class="subject">{shownSubject}</h1>
         <CopyAffordance value={shownSubject} label={t("reading.copy_subject")} />
       </div>
-
+    <div class="scroll">
       {#if conversation}
-        {#if newer.length > 0}
-          <div class="thread-more">
-            <button
-              class="more-toggle"
-              onclick={() => (laterOpen = !laterOpen)}
-              aria-expanded={laterOpen}
-            >
-              <span class="chev" class:open={laterOpen}>▸</span>
-              {t("reading.later", { n: newer.length })}
-            </button>
-            {#if laterOpen}
-              <div class="convo">
-                {#each newer as m (m.id)}
-                  {@render chatRow(m)}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-
-        {#if focused}
-          <div bind:this={focusedEl}>
-            {@render messageBlock(focused, bodies[focused.id])}
-          </div>
-        {/if}
-
-        {#if older.length > 0}
-          <div class="thread-more">
-            <button
-              class="more-toggle"
-              onclick={() => (earlierOpen = !earlierOpen)}
-              aria-expanded={earlierOpen}
-            >
-              <span class="chev" class:open={earlierOpen}>▸</span>
-              {t("reading.earlier", { n: older.length })}
-            </button>
-            {#if earlierOpen}
-              <div class="convo">
-                {#each older as m (m.id)}
-                  {@render chatRow(m)}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <div class="convo" use:followConversation>
+          {#each detail.messages as m (m.id)}
+            <div class="conversation-card" role="group" aria-label={`Message from ${m.from.name || m.from.addr}`} data-message-id={m.id} class:active={focused?.id === m.id}
+              use:watchMessage={m.id} onpointerdown={() => interact(m.id)} onfocusin={() => interact(m.id)}>
+              {@render messageBlock(m,bodies[m.id])}
+            </div>
+          {/each}
+        </div>
       {:else if shown}
         {@render messageBlock(shown, bodies[shown.id])}
       {/if}
@@ -612,16 +648,16 @@
       />
     {/if}
 
-    <footer class="actions">
+    {#if !conversation}<footer class="actions">
       {#if ai.keyPresent}
         <button class="ai-btn" onclick={openAsk}>✦ {t("ai.ask")}<kbd>Q</kbd></button>
       {/if}
       <button class="btn" onclick={() => reply("reply")}>{t("reading.reply")}<kbd>R</kbd></button>
-      {#if canReplyAll}
+      {#if canReplyAll(replyTarget)}
         <button class="btn" onclick={() => reply("reply_all")}>{t("reading.reply_all")}<kbd>A</kbd></button>
       {/if}
       <button class="btn" onclick={() => reply("forward")}>{t("reading.forward")}<kbd>F</kbd></button>
-    </footer>
+    </footer>{/if}
 
     {#if hoverUrl}
       <!-- Browser-style status bar: the real destination of the hovered link. -->
@@ -637,7 +673,7 @@
   {@const loaded = typeof body === "object" ? body : null}
   {@const job = translating[message.id]}
   {@const offerTranslate = ai.keyPresent && (loaded?.translate != null || job != null)}
-  <article class="message">
+  <article class="message" aria-label={`Email from ${message.from.name ?? message.from.addr}`}>
     <div class="meta">
       <span class="avatar">{initial(message.from.name ?? message.from.addr)}</span>
       <div class="who">
@@ -761,8 +797,11 @@
             <div class="body">
               <HtmlViewer
                 html={body.html}
+                appearance={mail.emailAppearanceFor(message.accountId)}
+                trimQuotes
                 security={body.security?.links}
                 onHoverUrl={(u) => (hoverUrl = u)}
+                onInteract={() => interact(message.id)}
               />
             </div>
           </details>
@@ -771,8 +810,11 @@
         <div class="body">
           <HtmlViewer
             html={body.html}
+                appearance={mail.emailAppearanceFor(message.accountId)}
+            trimQuotes
             security={body.security?.links}
             onHoverUrl={(u) => (hoverUrl = u)}
+            onInteract={() => interact(message.id)}
           />
         </div>
       {:else}
@@ -783,6 +825,19 @@
       {#if body.attachments.length > 0}
         <AttachmentChips attachments={body.attachments} />
       {/if}
+    {/if}
+    {#if conversation}
+      <footer class="card-actions">
+        {#if ai.keyPresent}<button class="card-ask" onclick={() => {setFocus(message.id);openAsk();}}>✦ {t("ai.ask")}</button>{/if}
+        <span class="spacer"></span>
+        <button disabled={replying.includes(message.id)} onclick={() => void reply("reply",message)}>
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 4 2 10l6 6M2 10h9a6 6 0 0 1 6 6"/></svg>{t("reading.reply")}
+        </button>
+        {#if canReplyAll(message)}<button disabled={replying.includes(message.id)} onclick={() => void reply("reply_all",message)}>{t("reading.reply_all")}</button>{/if}
+        <button disabled={replying.includes(message.id)} onclick={() => void reply("forward",message)}>
+          {t("reading.forward")}<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m12 4 6 6-6 6M18 10H9a6 6 0 0 0-6 6"/></svg>
+        </button>
+      </footer>
     {/if}
   </article>
 {/snippet}
@@ -820,33 +875,16 @@
   </div>
 {/snippet}
 
-{#snippet chatRow(m: MessageMeta)}
-  <button
-    class="chat-row"
-    class:outgoing={isOutgoing(m)}
-    class:unread={!m.isRead}
-    onclick={() => setFocus(m.id)}
-  >
-    <span class="avatar sm">{initial(m.from.name ?? m.from.addr)}</span>
-    <div class="chat-bubble">
-      <div class="chat-head">
-        <span class="chat-name">
-          {isOutgoing(m) ? t("reading.you") : (m.from.name ?? m.from.addr)}
-        </span>
-        <span class="chat-date">{formatFull(m.date)}</span>
-      </div>
-      <div class="chat-snippet">{m.snippet}</div>
-    </div>
-  </button>
-{/snippet}
-
 <style>
   .pane {
+    container-type:inline-size;
     flex: 1;
     display: flex;
     flex-direction: column;
     background: var(--surface);
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     /* Anchors the link-destination status bar. */
     position: relative;
   }
@@ -961,12 +999,20 @@
     }
   }
 
+  .browse-hint { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--text-faint); white-space:nowrap; }
+  .browse-hint kbd { padding:2px 4px; border:1px solid var(--hairline-strong); border-radius:4px; }
+  .browse-hint span { margin-left:4px; }
   .toolbar {
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 8px 20px 0;
+    padding: 12px 24px 8px;
+    flex-shrink: 0;
   }
+  .toolbar :global(.leading-actions) { margin-right:12px; }
+  .tool { transition:background 120ms,color 120ms; }
+  @media(max-width:1000px) { .toolbar .browse-hint span { display:none; } }
+  @media(prefers-reduced-motion:reduce) { .tool { transition:none; } }
   .spacer {
     flex: 1;
   }
@@ -986,6 +1032,14 @@
   .tool.starred {
     color: var(--text);
   }
+  .tool.priority-action { width:34px; height:34px; padding:0; margin-right:8px; justify-content:center; border-radius:50%; }
+  .tool.priority-action.active { color:var(--accent); background:var(--accent-soft); }
+  .tool:disabled { opacity:.45; cursor:default; }
+  @container (max-width:640px) {
+    .toolbar { padding:10px 16px 8px; }
+    .toolbar .browse-hint, .toolbar .tool kbd { display:none; }
+    .toolbar .tool { width:32px; padding:0; justify-content:center; }
+  }
   kbd {
     font-family: var(--font-mono);
     font-size: 10px;
@@ -1002,6 +1056,7 @@
      it back into view, while leaving the rest of a wide window unused. */
   .scroll {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 8px 36px 28px;
   }
@@ -1030,99 +1085,18 @@
     border-bottom: none;
   }
 
-  /* ---- Conversation (chat) view ---- */
-  .thread-more {
-    margin-top: 8px;
-  }
-  .more-toggle {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 8px 4px;
-    color: var(--text-dim);
-    font-size: 12.5px;
-    font-weight: 600;
-  }
-  .more-toggle:hover {
-    color: var(--text);
-  }
-  .chev {
-    font-size: 10px;
-    transition: transform 0.12s;
-    display: inline-block;
-  }
-  .chev.open {
-    transform: rotate(90deg);
-  }
-  .convo {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 4px;
-  }
-  .chat-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    width: 100%;
-    text-align: left;
-    padding: 6px 4px;
-    transition: opacity 0.08s;
-  }
-  .avatar.sm {
-    width: 26px;
-    height: 26px;
-    font-size: 11px;
-  }
-  .chat-bubble {
-    flex: 1;
-    min-width: 0;
-    background: var(--hover);
-    border: 1px solid var(--hairline);
-    border-radius: 12px;
-    padding: 7px 11px;
-    transition: border-color 0.08s;
-  }
-  .chat-row:hover .chat-bubble {
-    border-color: var(--hairline-strong);
-  }
-  .chat-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .chat-name {
-    font-weight: 600;
-    font-size: 12.5px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .chat-row.unread .chat-name {
-    font-weight: 800;
-  }
-  .chat-date {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-faint);
-    flex-shrink: 0;
-  }
-  .chat-snippet {
-    font-size: 12.5px;
-    color: var(--text-faint);
-    margin-top: 2px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  /* Outgoing (your own replies): mirrored to the right, tinted. */
-  .chat-row.outgoing {
-    flex-direction: row-reverse;
-  }
-  .chat-row.outgoing .chat-bubble {
-    background: var(--selected);
-  }
+  .reader-subject { padding:8px 36px 4px; margin:0; }
+  .conversation-card { min-width:0; border:1px solid var(--hairline); border-radius:14px; overflow:hidden; background:var(--surface); }
+  .conversation-card.active { border-color:var(--hairline-strong); }
+  .conversation-card .message { padding:0 20px 14px; margin:0; border:0; }
+  .convo { display:flex; flex-direction:column; gap:16px; margin-top:8px; overflow-anchor:none; }
+  .card-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding-top:14px; }
+  .card-actions .spacer { flex:1; }
+  .card-actions button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:30px; padding:5px 10px; border-radius:7px; color:var(--text-dim); font-size:12px; transition:background .12s,color .12s; }
+  .card-actions button:hover { color:var(--text); background:var(--hover); }
+  .card-actions button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .card-actions button:disabled { opacity:.5; }
+  @media (prefers-reduced-motion:reduce) { .card-actions button { transition:none; } }
 
   .meta {
     display: flex;

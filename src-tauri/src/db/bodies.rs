@@ -321,6 +321,7 @@ fn row_to_meta(r: &rusqlite::Row) -> rusqlite::Result<MessageMeta> {
     let list_unsubscribe: Option<String> = r.get(14)?;
     Ok(MessageMeta {
         id: r.get(0)?,
+        account_id: r.get(17)?,
         folder_id: r.get(1)?,
         thread_id: r.get(2)?,
         subject: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
@@ -347,7 +348,7 @@ pub fn get_thread(conn: &Connection, thread_id: i64) -> rusqlite::Result<Option<
     let mut stmt = conn.prepare_cached(
         "SELECT id, folder_id, thread_id, subject, from_name, from_addr, to_addrs, cc_addrs,
                 date, snippet, is_read, is_starred, has_attachments, body_state,
-                list_unsubscribe, list_unsubscribe_one_click, message_id
+                list_unsubscribe, list_unsubscribe_one_click, message_id, account_id
          FROM messages WHERE thread_id = ?1 ORDER BY date, id",
     )?;
     let mut seen: HashSet<String> = HashSet::new();
@@ -393,7 +394,7 @@ pub fn resolve_uids(conn: &Connection, message_ids: &[i64]) -> rusqlite::Result<
     let mut stmt = conn.prepare_cached(
         "SELECT m.folder_id, m.account_id, f.imap_name, m.uid
          FROM messages m JOIN folders f ON f.id = m.folder_id
-         WHERE m.id = ?1",
+         WHERE m.id = ?1 AND m.local_move=0",
     )?;
     for id in message_ids {
         let row: Option<(i64, String, String, u32)> = stmt
@@ -434,6 +435,15 @@ pub fn set_flag_local(
     for id in message_ids {
         tx.execute(
             &format!("UPDATE messages SET {column} = ?2 WHERE id = ?1"),
+            params![id, on],
+        )?;
+        let override_column = if flag == "seen" {
+            "read_override"
+        } else {
+            "star_override"
+        };
+        tx.execute(
+            &format!("UPDATE cached_moves SET {override_column}=?2 WHERE message_id=?1"),
             params![id, on],
         )?;
         let row: Option<(Option<i64>, i64)> = tx

@@ -1,5 +1,36 @@
 # Packaging
 
+## Linux preview (x86_64)
+
+The fork's [Linux installers workflow](../.github/workflows/linux.yml) builds
+`.deb` and `.AppImage` packages on every push, or via **Run workflow**. Download
+`skim-tasks-linux-x86_64` from the completed Actions run and unzip it.
+
+```sh
+sudo apt install ./Skim*.deb
+# Or run the portable build (no FUSE required):
+chmod +x ./*.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./Skim*.AppImage
+```
+
+Requires a graphical Linux desktop with WebKitGTK 4.1 and an unlocked Secret
+Service provider, such as GNOME Keyring (or a compatible KWallet setup).
+Passwords stay in that service, never plaintext files. `seahorse` is optional
+for opening the password manager. Linux notifications use the existing Tauri
+plugin; Windows toast click/mark-read actions are not implemented on Linux.
+Tray support depends on the desktop's AppIndicator support (GNOME needs an
+extension). Fork auto-updates remain disabled; install newer artifacts manually.
+
+For a local build on Ubuntu 22.04+, install Node 22.12+ (CI uses 24), Rust stable,
+and the Linux development packages listed in the workflow, then:
+
+```sh
+npm ci
+npm run tauri -- build --bundles deb,appimage -- --locked
+```
+
+## Windows
+
 Skim is published to Scoop, which ships the NSIS installer
 (`Skim_x.y.z_x64-setup.exe`) — the same per-user `.exe` the website links to.
 Every release, the `scoop` job in

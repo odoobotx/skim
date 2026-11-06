@@ -3,7 +3,7 @@
   import { folderIcon, folderLabel, folderTree, ownFoldersHeading } from "../lib/folders";
   import { t } from "../lib/i18n/index.svelte";
   import { ai } from "../lib/stores/ai.svelte";
-  import { mail } from "../lib/stores/mail.svelte";
+  import { mail, UNIFIED } from "../lib/stores/mail.svelte";
   import { palette } from "../lib/stores/palette.svelte";
   import { ui } from "../lib/stores/ui.svelte";
   import { updater } from "../lib/stores/update.svelte";
@@ -11,7 +11,7 @@
 
   async function compose() {
     const draft = await api.createDraft(await mail.composeAccountId());
-    await api.openComposeWindow(draft.id);
+    ui.openComposer(draft);
   }
 
   // "Отправленные" и "Черновики" содержат письма, написанные самим
@@ -20,8 +20,18 @@
   const showsUnread = (role: string | null) => !(role && noUnreadRoles.has(role));
 
   const mainFolders = $derived(
-    mail.folders.filter((f) => f.role !== null && f.role !== "all" && f.role !== "starred"),
+    ["inbox", "sent", ...(mail.sidebarPinned ? ["starred"] : []), "drafts"]
+      .flatMap(role => mail.folders.find(f => f.role === role) ?? []),
   );
+  const groupedAccounts = $derived(mail.accounts.length > 1 && mail.sidebarUnifiedGroups);
+  let accountsOpen = $state<Record<string, boolean>>({ inbox: true });
+  function openRole(role: string, accountId?: string) {
+    ui.showInbox();
+    const target = accountId ?? (groupedAccounts ? UNIFIED : mail.account?.id ?? mail.accounts[0]?.id);
+    if (target) void mail.switchAccount(target, role);
+  }
+  const otherFolders = $derived(mail.folders.filter(f => f.role !== null && !["inbox", "sent", "drafts", "all", "starred"].includes(f.role)));
+  let moreOpen = $state(false);
   // The user's own folders, as a tree: a nested folder prints only what its
   // parent row does not already say, and leans on an indent for the rest.
   const labels = $derived(folderTree(mail.folders.filter((f) => f.role === null)));
@@ -36,6 +46,9 @@
 
 <nav class="sidebar" class:collapsed={ui.sidebarCollapsed}>
   <div class="scroll">
+    <button class="item" class:selected={ui.homeOpen} onclick={() => ui.showHome()} title="Home">
+      <span aria-hidden="true">⌂</span><span class="name">Home</span>
+    </button>
     <button class="compose" onclick={compose} title={collapsed ? t("nav.compose") : undefined}>
       <span class="plus">+</span>
       <span class="name">{t("nav.compose")}</span>
@@ -53,23 +66,63 @@
     <div class="section">
       {#each mainFolders as folder (folder.id)}
         {@const name = folderLabel(folder)}
-        <button
-          class="item"
-          class:selected={mail.selectedFolderId === folder.id}
-          onclick={() => mail.selectFolder(folder.id)}
-          title={collapsed ? name : undefined}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
-            <path d={folderIcon(folder.role)} />
-          </svg>
-          <span class="name">{name}</span>
-          {#if folder.unreadCount > 0 && showsUnread(folder.role)}
-            <span class="count">{folder.unreadCount}</span>
+        {@const hasAccounts = groupedAccounts && ["inbox", "sent", "starred"].includes(folder.role ?? "")}
+        {@const unread = hasAccounts && folder.role === "inbox" ? Object.values(mail.inboxUnreadByAccount).reduce((a,b) => a+b,0) : folder.unreadCount}
+        <div class="folder-row" class:has-accounts={hasAccounts}>
+          <button
+            class="item"
+            class:selected={!ui.homeOpen && mail.selectedFolderId === folder.id && (!hasAccounts || mail.unified)}
+            onclick={() => hasAccounts ? openRole(folder.role!) : (ui.showInbox(), void mail.selectFolder(folder.id))}
+            title={hasAccounts ? `All accounts — ${name}` : collapsed ? name : undefined}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
+              <path d={folderIcon(folder.role)} />
+            </svg>
+            <span class="name">{name}</span>
+            {#if unread > 0 && showsUnread(folder.role) && folder.role !== "starred"}
+              <span class="count">{unread}</span>
+            {/if}
+          </button>
+          {#if hasAccounts && !collapsed}
+            <button class="accounts-toggle" aria-label={`${accountsOpen[folder.role!] ? "Hide" : "Show"} ${name} accounts`}
+              aria-expanded={!!accountsOpen[folder.role!]} onclick={() => accountsOpen[folder.role!] = !accountsOpen[folder.role!]}>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" class:expanded={accountsOpen[folder.role!]}><path d="m3.5 2 3 3-3 3" /></svg>
+            </button>
           {/if}
-        </button>
+        </div>
+        {#if hasAccounts && accountsOpen[folder.role!] && !collapsed}
+          <div class="account-children">
+            {#each mail.accounts as account (account.id)}
+              {@const badge = mail.accountBadge(account.id)}
+              <button class="item account-child" aria-label={`${account.email} — ${name}`} title={account.email}
+                class:selected={!ui.homeOpen && mail.account?.id === account.id && mail.selectedFolder?.role === folder.role}
+                onclick={() => openRole(folder.role!, account.id)}>
+                {#if badge}<span class="account-tag" style:background="var(--acct-{badge.color})">{badge.letter}</span>{/if}
+                <span class="name">{account.email}</span>
+                {#if folder.role === "inbox" && mail.inboxUnreadByAccount[account.id] > 0}
+                  <span class="count">{mail.inboxUnreadByAccount[account.id]}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
       {/each}
     </div>
 
+    <button class="item" aria-expanded={moreOpen} onclick={() => moreOpen = !moreOpen} title="More folders">
+      <span aria-hidden="true">{moreOpen ? "⌄" : "›"}</span><span class="name">More</span>
+    </button>
+    {#if moreOpen}
+      <div class="section">
+        {#each otherFolders as folder (folder.id)}
+          <button class="item" class:selected={!ui.homeOpen && mail.selectedFolderId === folder.id}
+            onclick={() => { ui.showInbox(); void mail.selectFolder(folder.id); }} title={folderLabel(folder)}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d={folderIcon(folder.role)} /></svg>
+            <span class="name">{folderLabel(folder)}</span>
+            {#if folder.unreadCount > 0 && showsUnread(folder.role)}<span class="count">{folder.unreadCount}</span>{/if}
+          </button>
+        {/each}
+      </div>
     {#if labels.length > 0}
       <div class="section">
         <div class="microlabel heading">{ownHeading}</div>
@@ -78,7 +131,7 @@
           <button
             class="item"
             class:selected={mail.selectedFolderId === folder.id}
-            onclick={() => mail.selectFolder(folder.id)}
+            onclick={() => { ui.showInbox(); void mail.selectFolder(folder.id); }}
             style="--depth: {Math.min(depth, 3)}"
             title={collapsed || path !== label ? path : undefined}
           >
@@ -91,6 +144,7 @@
           </button>
         {/each}
       </div>
+    {/if}
     {/if}
   </div>
 
@@ -206,7 +260,7 @@
     display: flex;
     flex-direction: column;
     border-right: 1px solid var(--hairline);
-    background: var(--bg);
+    background: var(--sidebar-bg);
     /* visible so the toggle FAB can protrude past the right edge; scrolling
        lives on the inner .scroll wrapper. */
     overflow: visible;
@@ -232,14 +286,17 @@
     gap: 8px;
     padding: 9px 12px;
     border-radius: var(--radius-m);
-    background: var(--text);
-    color: var(--bg);
+    background: var(--compose-bg);
+    color: var(--text);
+    border: 1px solid var(--compose-border);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
     font-weight: 600;
     font-size: 13.5px;
-    transition: opacity 0.1s;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
   .compose:hover {
-    opacity: 0.88;
+    border-color: var(--accent-dim);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent), 0 0 0 2px var(--accent-soft);
   }
   .plus {
     font-size: 16px;
@@ -268,8 +325,7 @@
     color: var(--text-faint);
   }
   .compose kbd {
-    color: var(--bg);
-    opacity: 0.55;
+    color: var(--text-dim);
   }
 
   .section {
@@ -279,6 +335,23 @@
   }
   .heading {
     padding: 0 12px 6px;
+  }
+  .folder-row { position: relative; }
+  .has-accounts .item { padding-right: 30px; }
+  .accounts-toggle {
+    position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+    width: 28px; height: 28px; display: grid; place-items: center;
+    color: var(--text-faint); border-radius: var(--radius-s);
+  }
+  .accounts-toggle:hover { background: var(--hover); color: var(--text); }
+  .accounts-toggle svg { transition: transform 0.12s ease; }
+  .accounts-toggle svg.expanded { transform: rotate(90deg); }
+  .account-children { padding: 2px 0 7px 12px; }
+  .account-child { gap: 7px; font-size: 11px; padding: 7px 8px; }
+  .account-tag {
+    min-width: 23px; height: 17px; padding: 0 3px; border-radius: 4px;
+    display: grid; place-items: center; color: var(--surface);
+    font: 600 9px var(--font-mono); flex-shrink: 0;
   }
 
   .item {
@@ -455,7 +528,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .sidebar,
-    .toggle {
+    .toggle,
+    .accounts-toggle svg {
       transition: none;
     }
   }

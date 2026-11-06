@@ -101,8 +101,8 @@ back into 2x if your platform handles it. `DEMO_SKIP_BLANK_CHECK=1` bypasses the
 
 ### Themes
 
-Themes are two-axis: `"<cold|warm>-<light|dark>"`. The demo pins **`warm-light`** (the app
-default) for the video — override with `DEMO_THEME=cold-dark`. Screenshots render
+Themes are two-axis: `"<moonlit|cold|warm>-<light|dark>"`. Fresh previews default to
+**`moonlit-dark`**. The video recorder still pins `warm-light` for its existing footage — override with `DEMO_THEME=cold-dark`. Screenshots render
 `warm-light` → `skim-light.jpg` and `warm-dark` → `skim-dark.jpg`; see the `SHOTS` array in
 `screenshots.mjs`.
 
@@ -129,3 +129,9 @@ DEMO_PREBUILT=1 node demo/record.mjs
 ```
 
 ~2 MB and far crisper than a GIF at the same size.
+
+The interactive preview now defaults to two fictional accounts and 45 inbox
+conversations, including several Priority examples, a Priority sender with more
+than five threads, DMARC/NAS notices, newsletters and personal mail. Thread
+examples contain alternating incoming/outgoing messages with quoted reply tails.
+Set `skimdemo.multiaccount` to `off` for the older single-account recorder view.

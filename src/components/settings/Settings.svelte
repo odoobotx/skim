@@ -2,7 +2,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { aiApi, aiStream, api, credentialStoreError, errorMessage } from "../../lib/api";
+  import { aiApi, aiStream, api, credentialStoreError, errorMessage, reportError } from "../../lib/api";
   import type { AiModel, AiProvider } from "../../lib/api";
   import { backdropClose } from "../../lib/backdrop";
   import { LOCALES, getLocale, setLocale, t, type Locale } from "../../lib/i18n/index.svelte";
@@ -31,6 +31,16 @@
       line2: string;
     }
   > = {
+    "moonlit-light": {
+      bg: "#f0f3f9", surface: "#fbfcff", text: "#202b43",
+      accent: "#6455bd", accentSoft: "#e8e5f9", accentBorder: "rgba(100,85,189,0.5)",
+      line: "rgba(40,57,89,0.22)", line2: "rgba(40,57,89,0.14)",
+    },
+    "moonlit-dark": {
+      bg: "#0c111e", surface: "#151d2e", text: "#e8edf8",
+      accent: "#b1a7f4", accentSoft: "rgba(157,144,236,0.13)", accentBorder: "rgba(177,167,244,0.45)",
+      line: "rgba(163,185,229,0.25)", line2: "rgba(163,185,229,0.16)",
+    },
     "cold-light": {
       bg: "#f7f7f6",
       surface: "#ffffff",
@@ -95,7 +105,9 @@
   let imagesPolicy = $state("block");
   let notifications = $state("on");
   let groupThreads = $state("on");
-  let autostart = $state(true);
+  let sentCopyModes = $state<Record<string,"auto" | "server" | "client">>({});
+  let sentCopySaving = $state(false);
+  let autostart = $state(false);
   // Which account's disconnect button is in its "confirm?" state.
   let confirmingRemoveId = $state<string | null>(null);
   // Settings-hosted "add another mailbox": swaps the panel body for the
@@ -147,6 +159,12 @@
       if (s.images_policy) imagesPolicy = s.images_policy;
       if (s.notifications) notifications = s.notifications;
       if (s.group_threads) groupThreads = s.group_threads;
+      try {
+        const modes: unknown = JSON.parse(s.sent_copy_modes ?? "{}");
+        if (modes && typeof modes === "object" && !Array.isArray(modes)) {
+          sentCopyModes = Object.fromEntries(Object.entries(modes).filter(([,mode]) => ["auto","server","client"].includes(mode)));
+        }
+      } catch { sentCopyModes = {}; }
       if (s.ai_user_name) aiName = s.ai_user_name;
       if (s.ai_style) aiStyle = s.ai_style;
       if (s.ai_instructions) aiInstructions = s.ai_instructions;
@@ -421,6 +439,16 @@
     await mail.setGroupThreads(value === "on");
   }
 
+  async function setSentCopyMode(accountId: string, mode: "auto" | "server" | "client") {
+    if (sentCopySaving) return;
+    const before = sentCopyModes;
+    sentCopyModes = {...before,[accountId]:mode};
+    sentCopySaving = true;
+    try { await api.setSetting("sent_copy_modes",JSON.stringify(sentCopyModes)); }
+    catch(error) { sentCopyModes = before;reportError("sent_copy.save",error);mail.noteError(t("ops.failed")); }
+    finally { sentCopySaving = false; }
+  }
+
   /** Saving a key can fail because Windows won't store it — say so plainly
    *  instead of handing the user a Win32 code. */
   function aiKeyError(e: unknown): string {
@@ -508,6 +536,18 @@
   }
 </script>
 
+{#snippet readingLayout(accountId: string, label: string)}
+  <label class="writer-field">
+    <span class="microlabel">{label}</span>
+    <select aria-label={label} value={mail.readingLayoutFor(accountId)}
+      onchange={(event) => void mail.setReadingLayout(accountId, event.currentTarget.value as "full" | "split").catch(error => { reportError("layout.save",error); mail.noteError(t("ops.failed")); })}>
+      <option value="full">Full-width · open mail in place</option>
+      <option value="split">Split view · list beside email</option>
+    </select>
+    <span class="dim hint">Applies throughout this mailbox, including groups.</span>
+  </label>
+{/snippet}
+
 <!-- A binary on/off setting: label on the left, sliding switch on the right. -->
 {#snippet toggleRow(label: string, on: boolean, toggle: () => void)}
   <div class="toggle-row">
@@ -577,6 +617,7 @@
       {#if mail.accounts.length > 0}
         <section>
           <div class="microlabel">{t("settings.account")}</div>
+          {#if mail.accounts.length > 1}{@render readingLayout("*", "All inboxes reading layout")}{/if}
           {#each mail.accounts as account (account.id)}
             {@const open = mail.accounts.length === 1 || expandedAccountId === account.id}
             <div class="row">
@@ -615,6 +656,26 @@
               <div class="warn">{t("settings.remove_confirm")}</div>
             {:else if open}
               <div class="identity">
+                {@render readingLayout(account.id, "Reading layout")}
+                <label class="writer-field">
+                  <span class="microlabel">Email appearance</span>
+                  <select aria-label="Email appearance" value={mail.emailAppearanceFor(account.id)}
+                    onchange={(event) => void mail.setEmailAppearance(account.id, event.currentTarget.value as "theme" | "original").catch(error => { reportError("appearance.save",error); mail.noteError(t("ops.failed")); })}>
+                    <option value="theme">Match app theme · default</option>
+                    <option value="original">Original email · sender's colors</option>
+                  </select>
+                  <span class="dim hint">Applies to all mail from this account, including All inboxes.</span>
+                </label>
+                <label class="writer-field">
+                  <span class="microlabel">{t("settings.sent_copies")}</span>
+                  <select aria-label={t("settings.sent_copies")} value={sentCopyModes[account.id] ?? "auto"} disabled={sentCopySaving}
+                    onchange={(event) => void setSentCopyMode(account.id,event.currentTarget.value as "auto" | "server" | "client")}>
+                    <option value="auto">{t("settings.sent_auto")}</option>
+                    <option value="server">{t("settings.sent_server")}</option>
+                    <option value="client">{t("settings.sent_client")}</option>
+                  </select>
+                  <span class="dim hint">{t("settings.sent_hint")}</span>
+                </label>
                 <label class="writer-field">
                   <span class="microlabel">{t("settings.sender_name")}</span>
                   <input
@@ -667,12 +728,13 @@
         <div class="theme-matrix">
           <!-- header row: temperature axis -->
           <div></div>
+          <div class="axis">{t("theme.moonlit")}</div>
           <div class="axis">{t("theme.cold")}</div>
           <div class="axis">{t("theme.warm")}</div>
 
           {#each [{ light: "light" as Lightness }, { light: "dark" as Lightness }] as row (row.light)}
             <div class="axis right">{t(`theme.${row.light}`)}</div>
-            {#each ["cold" as Temperature, "warm" as Temperature] as temp (temp)}
+            {#each ["moonlit" as Temperature, "cold" as Temperature, "warm" as Temperature] as temp (temp)}
               {@const p = THEME_PREVIEWS[`${temp}-${row.light}`]}
               <button
                 class="cell"
@@ -721,6 +783,16 @@
         {@render toggleRow(t("settings.group_threads"), groupThreads === "on", () =>
           setGroupThreads(groupThreads === "on" ? "off" : "on"),
         )}
+      </section>
+
+      <section class="toggles">
+        <div class="microlabel">Sidebar</div>
+        {@render toggleRow("Unified Inbox, Sent and Pinned", mail.sidebarUnifiedGroups, () => {
+          void mail.setSidebarUnifiedGroups(!mail.sidebarUnifiedGroups).catch(error => { reportError("sidebar.save",error); mail.noteError(t("ops.failed")); });
+        })}
+        {@render toggleRow("Show Pinned", mail.sidebarPinned, () => {
+          void mail.setSidebarPinned(!mail.sidebarPinned).catch(error => { reportError("sidebar.save",error); mail.noteError(t("ops.failed")); });
+        })}
       </section>
 
       <section>
@@ -1238,7 +1310,7 @@
   /* Theme matrix: temperature (columns) × lightness (rows), live mini-previews. */
   .theme-matrix {
     display: grid;
-    grid-template-columns: 64px 1fr 1fr;
+    grid-template-columns: 48px repeat(3, minmax(0, 1fr));
     gap: 10px 12px;
     align-items: center;
   }
@@ -1566,7 +1638,8 @@
     gap: 6px;
   }
   .writer-field input,
-  .writer-field textarea {
+  .writer-field textarea,
+  .writer-field select {
     padding: 8px 10px;
     border: 1px solid var(--hairline-strong);
     border-radius: var(--radius-s);
@@ -1576,8 +1649,16 @@
     font-family: inherit;
   }
   .writer-field input:focus,
-  .writer-field textarea:focus {
+  .writer-field textarea:focus,
+  .writer-field select:focus-visible {
     border-color: var(--accent-dim);
+  }
+  .writer-field select {
+    min-height: 38px;
+    color: var(--text);
+    background: var(--surface);
+    outline: none;
+    cursor: pointer;
   }
   .hint {
     font-size: 11.5px;

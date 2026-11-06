@@ -3,6 +3,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, reportError } from "../api";
 import { t } from "../i18n/index.svelte";
+import { isPriority, type SenderRules } from "../inbox";
+import { ui } from "./ui.svelte";
 import type { Account, Folder, SyncState, ThreadRow } from "../types";
 
 const PAGE = 100;
@@ -21,6 +23,14 @@ const state = $state({
   selectedThreadId: null as number | null,
   selectedMessageId: null as number | null,
   groupThreads: true,
+  showDone: false,
+  sidebarUnifiedGroups: true,
+  sidebarPinned: true,
+  inboxUnreadByAccount: {} as Record<string, number>,
+  readingLayouts: {} as Record<string, "full" | "split">,
+  emailAppearances: {} as Record<string, "theme" | "original">,
+  senderRules: {} as SenderRules,
+  priorityPending: [] as number[],
   syncState: "idle" as SyncState,
   syncMessage: null as string | null,
   syncProgress: null as { done: number; total: number } | null,
@@ -33,6 +43,7 @@ const state = $state({
   // Rows ticked for a bulk action, by `rowKey`. Empty means "no selection" and
   // the list shows no selection chrome at all.
   selectedKeys: [] as number[],
+  navigationKeys: null as number[] | null,
   // Where the last tick happened, so Shift+click can extend a range from it.
   anchorKey: null as number | null,
   // Transient notice for a queued op that failed after all retries.
@@ -62,6 +73,7 @@ let listenersAttached = false;
  *  routinely beats the webview's own boot queries; dropping it used to cost the
  *  user a full poll interval of staring at an empty list. */
 let missedRefresh = false;
+let preferredFolderRole = "inbox";
 let opErrorTimer: ReturnType<typeof setTimeout> | null = null;
 // Last reported engine state per account — the unified view's indicator
 // aggregates these instead of following one mailbox.
@@ -213,37 +225,48 @@ async function refreshAccounts() {
   }
 }
 
-async function refreshFolders() {
+async function refreshFolders(preferredRole?: string) {
   const accountId = state.activeAccountId;
   if (accountId === null) {
     missedRefresh = true;
     return;
   }
-  const folders = await guard(() =>
+  const result = await guard(() => Promise.all([
     accountId === UNIFIED ? api.listUnifiedFolders() : api.listFolders(accountId),
-  );
-  if (folders === null) return;
+    api.inboxUnreadCounts().catch(() => state.inboxUnreadByAccount),
+  ]));
+  if (result === null) return;
+  const [folders, unread] = result;
   // The user may have switched accounts mid-fetch — these folders belong to
   // the previous mailbox.
   if (state.activeAccountId !== accountId) return;
-  state.folders = folders;
+  state.inboxUnreadByAccount = unread;
+  state.folders = folders.some(f => f.role === "starred") ? folders : [...folders, {
+    id: -2, accountId, imapName: "", role: "starred", displayName: "Pinned", unreadCount: 0, sortOrder: 1,
+  }];
   // Auto-select inbox once it appears — also when the selected folder is gone
   // (e.g. a virtual label vanished with its last message).
   if (
     state.selectedFolderId === null ||
     !state.folders.some((f) => f.id === state.selectedFolderId)
   ) {
-    const inbox = state.folders.find((f) => f.role === "inbox");
+    const inbox = state.folders.find((f) => f.role === (preferredRole ?? preferredFolderRole));
     if (inbox) await selectFolder(inbox.id);
   }
 }
 
 /** Make another mailbox the active one: reset the view, load its folders
  *  (auto-selecting the inbox), and remember the choice across restarts. */
-async function switchAccount(id: string) {
+async function switchAccount(id: string, role?: string) {
   const valid =
     id === UNIFIED ? state.accounts.length > 1 : state.accounts.some((a) => a.id === id);
-  if (id === state.activeAccountId || !valid) return;
+  if (!valid) return;
+  if (id === state.activeAccountId) {
+    const folder = role ? state.folders.find(f => f.role === role) : undefined;
+    if (folder) await selectFolder(folder.id);
+    return;
+  }
+  preferredFolderRole = role ?? "inbox";
   state.activeAccountId = id;
   state.selectedFolderId = null;
   state.selectedThreadId = null;
@@ -257,13 +280,14 @@ async function switchAccount(id: string) {
   state.syncProgress = null;
   if (id === UNIFIED) applyAggregateSyncState();
   void api.setSetting("active_account", id);
-  await refreshFolders();
+  await refreshFolders(role);
 }
 
 /** Open a folder/thread/message wherever it lives — switching the active
  *  account first when the target belongs to another mailbox (toast clicks,
  *  cold-start pending opens, AI citations, search hits). */
 async function openLocation(folderId: number, threadId: number | null, messageId: number) {
+  ui.showInbox();
   if (isUnified()) {
     // The unified view has no real folders — map the target onto its virtual
     // counterpart (same role, or same label name).
@@ -303,6 +327,12 @@ async function openLocation(folderId: number, threadId: number | null, messageId
 /** One page of rows for a folder — threads when grouping is on, else messages.
  *  Negative ids are virtual (cross-account) folders, addressed by role/label. */
 function fetchPage(folderId: number, offset: number, limit = PAGE): Promise<ThreadRow[]> {
+  if (state.folders.find(folder => folder.id === folderId)?.role === "starred") {
+    return api.listPinned(isUnified() ? null : state.activeAccountId, state.groupThreads, offset, limit);
+  }
+  if (state.folders.find(folder => folder.id === folderId)?.role === "inbox") {
+    return api.listTaskInbox(isUnified() ? null : state.activeAccountId, state.showDone, state.groupThreads, offset, limit);
+  }
   if (folderId < 0) {
     const virtual = state.folders.find((f) => f.id === folderId);
     if (!virtual) return Promise.resolve([]);
@@ -319,8 +349,12 @@ function fetchPage(folderId: number, offset: number, limit = PAGE): Promise<Thre
 /** Deepest a refresh will re-read. A list scrolled thousands of rows down does
  *  not need all of them re-fetched every time a message arrives. */
 const MAX_REFRESH = 500;
+let readSerial = 0;
+const viewKey = () => `${state.activeAccountId}:${state.selectedFolderId}:${state.groupThreads}:${state.showDone}`;
 
 async function refreshThreads() {
+  const serial = ++readSerial;
+  const key = viewKey();
   const folderId = state.selectedFolderId;
   if (folderId === null) {
     missedRefresh = true;
@@ -335,18 +369,24 @@ async function refreshThreads() {
   );
   const rows = await guard(() => fetchPage(folderId, 0, depth));
   if (rows === null) return;
+  if (serial !== readSerial || key !== viewKey()) return;
+  state.threadsLoading = false;
   shown(rows);
   pruneSelection();
 }
 
 async function selectFolder(id: number) {
+  preferredFolderRole = state.folders.find(f => f.id === id)?.role ?? "inbox";
   state.selectedFolderId = id;
+  const serial = ++readSerial;
+  const key = viewKey();
   state.selectedThreadId = null;
   state.selectedMessageId = null;
   clearSelection();
   state.threadsLoading = true;
   try {
     const rows = await guard(() => fetchPage(id, 0));
+    if (serial !== readSerial || key !== viewKey()) return;
     // A failed read must not leave the previous folder's mail under the new
     // folder's name — the list says "couldn't load" instead.
     if (rows === null) {
@@ -356,7 +396,7 @@ async function selectFolder(id: number) {
       shown(rows);
     }
   } finally {
-    state.threadsLoading = false;
+    if (serial === readSerial) state.threadsLoading = false;
   }
 }
 
@@ -367,13 +407,14 @@ async function loadMoreThreads() {
   // the same offset and append the same page twice (duplicate {#each} keys).
   if (state.selectedFolderId === null || loadingMore) return;
   const folderId = state.selectedFolderId;
-  const grouped = state.groupThreads;
+  const key = viewKey();
+  const serial = readSerial;
   loadingMore = true;
   try {
     const more = await fetchPage(folderId, state.fetched);
     // The user may have switched folders (or grouping) mid-fetch — these rows
     // belong to the previous view, don't append them to the new one.
-    if (state.selectedFolderId !== folderId || state.groupThreads !== grouped) return;
+    if (key !== viewKey() || serial !== readSerial) return;
     state.fetched += more.length;
     // A concurrent refresh can shift the offset; drop rows we already show.
     const seen = new Set(state.threads.map(rowKey));
@@ -403,7 +444,7 @@ function pruneSelection() {
 function toggleRow(key: number, extend = false) {
   const anchor = state.anchorKey;
   if (extend && anchor !== null && anchor !== key) {
-    const keys = state.threads.map(rowKey);
+    const keys = navigationRows().map(rowKey);
     const from = keys.indexOf(anchor);
     const to = keys.indexOf(key);
     if (from !== -1 && to !== -1) {
@@ -427,8 +468,17 @@ function toggleRow(key: number, extend = false) {
  *  folder". Skim has no undo, so a bulk action must never reach mail that was
  *  never on screen. */
 function selectAllLoaded() {
-  state.selectedKeys = state.threads.map(rowKey);
+  state.selectedKeys = navigationRows().map(rowKey);
   state.anchorKey = null;
+}
+
+function navigationRows(): ThreadRow[] {
+  if (state.navigationKeys === null) return state.threads;
+  const rows = new Map(state.threads.map(row => [rowKey(row), row]));
+  return state.navigationKeys.flatMap(key => {
+    const row = rows.get(key);
+    return row ? [row] : [];
+  });
 }
 
 /** Toggle thread grouping and reload the current folder in the new mode. */
@@ -451,7 +501,16 @@ async function setGroupThreads(on: boolean) {
   }
 }
 
+let inboxVisitQueue = Promise.resolve();
+
 export const mail = {
+  acknowledgeInbox(accountId: string | null) {
+    inboxVisitQueue = inboxVisitQueue.catch(() => {}).then(() => api.acknowledgeInbox(accountId));
+    return inboxVisitQueue;
+  },
+  newUnread(accountId: string | null) {
+    return inboxVisitQueue.catch(() => {}).then(() => api.listRecentUnread(accountId));
+  },
   get booted() {
     return state.booted;
   },
@@ -479,6 +538,18 @@ export const mail = {
   get threads() {
     return state.threads;
   },
+  get navigationRows() {
+    return navigationRows();
+  },
+  setNavigationRows(keys: number[] | null) {
+    state.navigationKeys = keys;
+    if (keys !== null) {
+      const visible = new Set(keys);
+      if (state.selectedKeys.some(key => !visible.has(key))) {
+        state.selectedKeys = state.selectedKeys.filter(key => visible.has(key));
+      }
+    }
+  },
   get selectedFolderId() {
     return state.selectedFolderId;
   },
@@ -487,15 +558,77 @@ export const mail = {
   },
   set selectedThreadId(id: number | null) {
     state.selectedThreadId = id;
+    if (id !== null) ui.showInbox();
   },
   get selectedMessageId() {
     return state.selectedMessageId;
   },
   set selectedMessageId(id: number | null) {
-    state.selectedMessageId = id;
+    state.selectedMessageId = state.groupThreads ? null : id;
   },
   get groupThreads() {
     return state.groupThreads;
+  },
+  get readingLayout(): "full" | "split" { return state.readingLayouts[state.activeAccountId ?? UNIFIED] ?? "full"; },
+  readingLayoutFor(accountId: string): "full" | "split" { return state.readingLayouts[accountId] ?? "full"; },
+  emailAppearanceFor(accountId: string): "theme" | "original" { return state.emailAppearances[accountId] ?? "theme"; },
+  async setEmailAppearance(accountId: string, appearance: "theme" | "original") {
+    const before = state.emailAppearances;
+    state.emailAppearances = {...before, [accountId]: appearance};
+    try { await api.setSetting("email_appearances", JSON.stringify(state.emailAppearances)); }
+    catch(error) { state.emailAppearances = before; throw error; }
+  },
+  async setReadingLayout(accountId: string, layout: "full" | "split") {
+    const before = state.readingLayouts;
+    state.readingLayouts = {...before, [accountId]: layout};
+    try { await api.setSetting("reading_layouts", JSON.stringify(state.readingLayouts)); }
+    catch(error) { state.readingLayouts = before; throw error; }
+  },
+  get showDone() { return state.showDone; },
+  async setShowDone(on: boolean) {
+    if (state.showDone === on) return;
+    state.showDone = on;
+    clearSelection();
+    try { await api.setSetting("inbox_show_done", on ? "on" : "off"); }
+    catch (error) {
+      state.showDone = !on;
+      await refreshThreads();
+      throw error;
+    }
+    await refreshThreads();
+    if (on) void api.syncNow(activeAccount()?.id).catch(() => {});
+  },
+  async setPriority(row: ThreadRow, priority: boolean | null) {
+    const key=rowKey(row);
+    if (state.priorityPending.includes(key)) return;
+    state.priorityPending = [...state.priorityPending,key];
+    state.threads=state.threads.map(item=>rowKey(item)===key ? {...item,priorityOverride:priority,priorityAt:priority ? Date.now() : 0} : item);
+    try {await api.setTaskPriority(row,priority);await refreshThreads();}
+    catch(error) {await refreshThreads();throw error;}
+    finally {state.priorityPending=state.priorityPending.filter(item=>item!==key);}
+  },
+  togglePriority(row: ThreadRow) { return this.setPriority(row,!isPriority(row,state.senderRules)); },
+  priorityPending(row: ThreadRow) { return state.priorityPending.includes(rowKey(row)); },
+  get senderRules() { return state.senderRules; },
+  set senderRules(value: SenderRules) { state.senderRules = value; },
+  async setDone(row: ThreadRow, done: boolean) {
+    await this.setDoneRows([row], done);
+  },
+  async setDoneRows(rows: ThreadRow[], done: boolean) {
+    const keys = new Set(rows.map(rowKey));
+    state.threads = state.threads.flatMap(row => keys.has(rowKey(row))
+      ? done && !state.showDone ? [] : [{ ...row, isDone: done, isRead: done || row.isRead, priorityOverride: done ? null : row.priorityOverride, priorityAt: done ? 0 : row.priorityAt, pendingMove: true }] : [row]);
+    if (done && rows.some(row => row.id === state.selectedThreadId)) {
+      state.selectedThreadId = null;
+      state.selectedMessageId = null;
+    }
+    try {
+      await api.setTasksDone(rows, done);
+    } catch (error) {
+      await refreshThreads();
+      throw error;
+    }
+    await refreshThreads();
   },
   get selectedFolder() {
     return state.folders.find((f) => f.id === state.selectedFolderId) ?? null;
@@ -533,7 +666,8 @@ export const mail = {
   clearSelection,
 
   get selectedThread() {
-    return state.threads.find((t) => t.id === state.selectedThreadId) ?? null;
+    return state.threads.find(t => t.id === state.selectedThreadId &&
+      (state.groupThreads || state.selectedMessageId === null || t.messageId === state.selectedMessageId)) ?? null;
   },
   get syncState() {
     return state.syncState;
@@ -576,6 +710,21 @@ export const mail = {
     // Thread grouping preference (default on when the key is absent).
     const settings = await api.getSettings();
     state.groupThreads = settings.group_threads !== "off";
+    state.showDone = settings.inbox_show_done === "on";
+    state.sidebarUnifiedGroups = settings.sidebar_unified_groups !== "off";
+    state.sidebarPinned = settings.sidebar_pinned !== "off";
+    try {
+      const layouts: unknown = JSON.parse(settings.reading_layouts ?? "{}");
+      if (layouts && typeof layouts === "object" && !Array.isArray(layouts)) {
+        state.readingLayouts = Object.fromEntries(Object.entries(layouts).filter(([,value]) => value === "full" || value === "split"));
+      }
+    } catch { state.readingLayouts = {}; }
+    try {
+      const appearances: unknown = JSON.parse(settings.email_appearances ?? "{}");
+      if (appearances && typeof appearances === "object" && !Array.isArray(appearances)) {
+        state.emailAppearances = Object.fromEntries(Object.entries(appearances).filter(([,value]) => value === "theme" || value === "original"));
+      }
+    } catch { state.emailAppearances = {}; }
     state.accounts = await api.listAccounts();
     // Restore the last scope; self-heal a stale id. With 2+ mailboxes the
     // unified view is the default — a concrete saved choice is respected,
@@ -656,12 +805,34 @@ export const mail = {
     }
   },
 
-  /** Colored dot + letter identifying a row's mailbox in the unified list.
-   *  Colors follow the stable account order and repeat past five. */
-  accountBadge(accountId: string): { letter: string; color: number } | null {
+  /** Domain tags distinguish mailboxes even when their display names match. */
+  accountBadge(accountId: string): { letter: string; color: number; title: string } | null {
     const i = state.accounts.findIndex((a) => a.id === accountId);
     if (i < 0) return null;
-    return { letter: state.accounts[i].email[0]?.toLowerCase() ?? "?", color: (i % 5) + 1 };
+    const tag = (email: string) => (email.split("@")[1] ?? email).replace(/[^a-z0-9]/gi, "").slice(0, 3).toUpperCase() || "MAIL";
+    const base = tag(state.accounts[i].email);
+    const matches = state.accounts.filter(a => tag(a.email) === base);
+    const letter = matches.length > 1 ? `${base.slice(0,2)}${matches.findIndex(a => a.id === accountId) + 1}` : base;
+    return { letter, color: (i % 5) + 1, title: state.accounts[i].email };
+  },
+
+  get sidebarUnifiedGroups() { return state.sidebarUnifiedGroups; },
+  get sidebarPinned() { return state.sidebarPinned; },
+  get inboxUnreadByAccount() { return state.inboxUnreadByAccount; },
+  async setSidebarUnifiedGroups(on: boolean) {
+    await api.setSetting("sidebar_unified_groups", on ? "on" : "off");
+    state.sidebarUnifiedGroups = on;
+    if (!on && isUnified() && state.accounts[0]) {
+      await switchAccount(state.accounts[0].id, state.folders.find(f => f.id === state.selectedFolderId)?.role ?? "inbox");
+    }
+  },
+  async setSidebarPinned(on: boolean) {
+    await api.setSetting("sidebar_pinned", on ? "on" : "off");
+    state.sidebarPinned = on;
+    if (!on && state.folders.find(f => f.id === state.selectedFolderId)?.role === "starred") {
+      const inbox = state.folders.find(f => f.role === "inbox");
+      if (inbox) await selectFolder(inbox.id);
+    }
   },
 
   /** Which mailbox a fresh compose should send from: the active one, or in

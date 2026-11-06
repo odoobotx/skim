@@ -1,0 +1,86 @@
+name: Linux installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Linux dependencies
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libssl-dev libdbus-1-dev xdg-utils gnome-keyring dbus-x11 xvfb
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+      - run: cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Test Linux credential storage
+        run: |
+          dbus-run-session -- sh -ec '
+            printf "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            cargo test --locked --manifest-path src-tauri/Cargo.toml linux_keyring_roundtrip -- --ignored
+          '
+
+      - name: Build Debian installer and AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          SKIM_GOOGLE_CLIENT_ID: ${{ secrets.SKIM_GOOGLE_CLIENT_ID }}
+          SKIM_GOOGLE_CLIENT_SECRET: ${{ secrets.SKIM_GOOGLE_CLIENT_SECRET }}
+          SKIM_MICROSOFT_CLIENT_ID: ${{ secrets.SKIM_MICROSOFT_CLIENT_ID }}
+        run: npm run tauri -- build --bundles deb,appimage -- --locked
+
+      - name: Check Debian package
+        run: |
+          dpkg-deb --info src-tauri/target/release/bundle/deb/*.deb
+          dpkg-deb --contents src-tauri/target/release/bundle/deb/*.deb
+
+      - name: Smoke-test packaged Linux app
+        run: |
+          package_dir="$(mktemp -d)"
+          dpkg-deb --extract src-tauri/target/release/bundle/deb/*.deb "$package_dir"
+          export XDG_DATA_HOME="$(mktemp -d)" XDG_CONFIG_HOME="$(mktemp -d)"
+          status=0
+          dbus-run-session -- xvfb-run -a timeout 15s "$package_dir/usr/bin/skim-tasks" || status=$?
+          test "$status" -eq 124
+          test -f "$XDG_DATA_HOME/com.techsystech.skimtasks/skim.db"
+
+      - name: Save Linux installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: skim-tasks-linux-x86_64
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
