@@ -291,6 +291,37 @@ pub async fn remove_draft_attachment(state: State<'_, AppState>, attachment_id: 
         .await
 }
 
+fn reply_recipients(
+    mode: &str,
+    own: &str,
+    from: Option<&str>,
+    reply_to: Option<&str>,
+    to: &[String],
+    cc: &[String],
+) -> String {
+    let outgoing = from.is_some_and(|addr| addr.eq_ignore_ascii_case(own));
+    let source = reply_to.filter(|addr| !addr.trim().is_empty()).or(from);
+    let mut recipients = Vec::new();
+    match mode {
+        "reply" if outgoing => recipients.extend(to.iter().map(String::as_str)),
+        "reply" => recipients.extend(source),
+        "reply_all" => {
+            if !outgoing {
+                recipients.extend(source);
+            }
+            recipients.extend(to.iter().chain(cc).map(String::as_str));
+        }
+        _ => {}
+    }
+    let mut seen = std::collections::HashSet::new();
+    recipients.retain(|addr| {
+        !addr.trim().is_empty()
+            && !addr.eq_ignore_ascii_case(own)
+            && seen.insert(addr.to_lowercase())
+    });
+    recipients.join(", ")
+}
+
 /// Prefill a reply/forward draft from an existing message.
 #[tauri::command]
 pub async fn get_reply_template(
@@ -333,6 +364,7 @@ pub async fn get_reply_template(
         Option<String>,
         Option<String>,
         i64,
+        Option<String>,
     );
     let mode_for_db = mode.clone();
     state
@@ -341,7 +373,7 @@ pub async fn get_reply_template(
             use rusqlite::OptionalExtension;
             let row: Option<SourceRow> = conn
                 .query_row(
-                    "SELECT account_id, subject, from_name, from_addr, to_addrs, cc_addrs, date
+                    "SELECT account_id, subject, from_name, from_addr, to_addrs, cc_addrs, date, reply_to_addr
                      FROM messages WHERE id = ?1",
                     rusqlite::params![message_id],
                     |r| {
@@ -353,11 +385,12 @@ pub async fn get_reply_template(
                             r.get(4)?,
                             r.get(5)?,
                             r.get(6)?,
+                            r.get(7)?,
                         ))
                     },
                 )
                 .optional()?;
-            let Some((account_id, subject, from_name, from_addr, to_json, cc_json, date)) = row
+            let Some((account_id, subject, from_name, from_addr, to_json, cc_json, date, reply_to_addr)) = row
             else {
                 return Ok(None);
             };
@@ -367,30 +400,9 @@ pub async fn get_reply_template(
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
 
-            // Recipients.
-            let to_field = match mode_for_db.as_str() {
-                "reply" => from_addr.clone().unwrap_or_default(),
-                "reply_all" => {
-                    let mut all: Vec<String> = Vec::new();
-                    if let Some(f) = &from_addr {
-                        all.push(f.clone());
-                    }
-                    for a in crate::db::queries::addresses_from_json(to_json.as_deref())
-                        .iter()
-                        .chain(crate::db::queries::addresses_from_json(cc_json.as_deref()).iter())
-                    {
-                        all.push(a.addr.clone());
-                    }
-                    let own = account_email.to_lowercase();
-                    let mut seen = std::collections::HashSet::new();
-                    all.retain(|a| {
-                        let l = a.to_lowercase();
-                        l != own && seen.insert(l)
-                    });
-                    all.join(", ")
-                }
-                _ => String::new(),
-            };
+            let to: Vec<String> = crate::db::queries::addresses_from_json(to_json.as_deref()).into_iter().map(|a| a.addr).collect();
+            let cc: Vec<String> = crate::db::queries::addresses_from_json(cc_json.as_deref()).into_iter().map(|a| a.addr).collect();
+            let to_field = reply_recipients(&mode_for_db, &account_email, from_addr.as_deref(), reply_to_addr.as_deref(), &to, &cc);
 
             // Subject.
             let base = subject.unwrap_or_default();
@@ -729,6 +741,71 @@ pub async fn open_compose_window(app: AppHandle, draft_id: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::reword_signature;
+
+    #[test]
+    fn replies_follow_the_selected_message_and_reply_to_header() {
+        let to = vec!["me@example.com".into(), "Other@example.com".into()];
+        let cc = vec!["other@example.com".into(), "third@example.com".into()];
+        assert_eq!(
+            super::reply_recipients(
+                "reply",
+                "me@example.com",
+                Some("sender@example.com"),
+                Some("help@example.com"),
+                &to,
+                &cc
+            ),
+            "help@example.com"
+        );
+        assert_eq!(
+            super::reply_recipients(
+                "reply_all",
+                "me@example.com",
+                Some("sender@example.com"),
+                Some("help@example.com"),
+                &to,
+                &cc
+            ),
+            "help@example.com, Other@example.com, third@example.com"
+        );
+        assert_eq!(
+            super::reply_recipients(
+                "reply",
+                "me@example.com",
+                Some("ME@example.com"),
+                None,
+                &to,
+                &cc
+            ),
+            "Other@example.com"
+        );
+        assert_eq!(
+            super::reply_recipients(
+                "reply_all",
+                "me@example.com",
+                Some("me@example.com"),
+                None,
+                &to,
+                &cc
+            ),
+            "Other@example.com, third@example.com"
+        );
+        assert_eq!(
+            super::reply_recipients(
+                "forward",
+                "me@example.com",
+                Some("sender@example.com"),
+                None,
+                &to,
+                &cc
+            ),
+            ""
+        );
+        assert_eq!(
+            super::reply_recipients("reply", "me@example.com", None, None, &[], &[]),
+            ""
+        );
+    }
 
     #[test]
     fn a_reply_is_signed_above_the_quote() {

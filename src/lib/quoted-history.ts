@@ -1,28 +1,123 @@
-/** Collapse known reply-history containers in already sanitized email HTML. */
-export function withoutQuotedHistory(html: string): {html: string; hasQuoted: boolean} {
-  const template=document.createElement("template");
-  template.innerHTML=html;
-  const root=template.content;
-  let removed=false;
-  for (const quote of root.querySelectorAll('[data-skim-quote="history"],.gmail_quote,.yahoo_quoted,blockquote[type="cite"]')) {
-    quote.remove();removed=true;
+export interface QuotedMessage {
+  html: string;
+  sender: string | null;
+  date: string | null;
+  attribution: string;
+}
+
+const historySelector = '[data-skim-quote="history"],.gmail_quote,.yahoo_quoted,blockquote[type="cite"],blockquote.iosymail,[class$="iosymail"]';
+const attributionSelector = '[data-skim-quote="attribution"],.moz-cite-prefix,.gmail_attr,.yahoo-quoted-begin,[class$="yahoo-quoted-begin"]';
+const outlookSelector = '[data-skim-quote="outlook"],#divRplyFwdMsg';
+
+function textWithBreaks(element: Element): string {
+  const copy=element.cloneNode(true) as Element;
+  for (const br of copy.querySelectorAll("br")) br.replaceWith("\n");
+  return (copy.textContent ?? "").replace(/\u00a0/g," ").trim();
+}
+
+function header(text: string): Omit<QuotedMessage,"html"> {
+  const attribution=text.replace(/[ \t]+/g," ").trim();
+  const on=attribution.replace(/\s+/g," ").match(/^On (.+) wrote:\s*$/i);
+  const from=attribution.match(/\bFrom:\s*(.*?)(?=\n|\bSent:|\bDate:|\bTo:|$)/i);
+  const sent=attribution.match(/\b(?:Sent|Date):\s*(.*?)(?=\n|\bTo:|\bSubject:|$)/i);
+  const parts=on?.[1].match(/^(.*),\s*([^,]+)$/);
+  const sender=(parts?.[2] ?? from?.[1] ?? "").replace(/\s*<[^<>]+>\s*$/,"").trim();
+  return {sender:sender || null,date:parts?.[1]?.trim() || sent?.[1]?.trim() || null,attribution};
+}
+
+function hasContent(root: DocumentFragment): boolean {
+  const copy=root.cloneNode(true) as DocumentFragment;
+  for (const style of copy.querySelectorAll("style")) style.remove();
+  return !!(copy.textContent ?? "").trim() || !!copy.querySelector("img,hr,table");
+}
+
+function serialize(root: DocumentFragment): string {
+  const template=document.createElement("template");template.content.append(root);
+  return template.innerHTML;
+}
+
+function precedingAttribution(quote: Element): Element | null {
+  let node=quote.previousSibling;
+  while (node && (!node.textContent?.trim() && (!(node instanceof Element) || node.tagName === "BR"))) node=node.previousSibling;
+  if (!(node instanceof Element)) return null;
+  return node.matches(attributionSelector) || /^On\s+.+\s+wrote:\s*$/is.test(textWithBreaks(node)) ? node : null;
+}
+
+interface QuoteSeed { content: DocumentFragment; attribution: string; }
+
+/** Remove recognizable history blocks; ordinary inline quotes stay put. */
+function extract(root: DocumentFragment): QuoteSeed[] {
+  for (const marker of root.querySelectorAll(outlookSelector)) {
+    if (!root.contains(marker)) continue;
+    const wrapper=document.createElement("div");wrapper.dataset.skimQuote="history";
+    marker.before(wrapper);
+    let node: ChildNode | null=marker;
+    while (node) {const next: ChildNode | null=node.nextSibling;wrapper.append(node);node=next;}
+    marker.removeAttribute("id");
+    marker.setAttribute("data-skim-quote",textWithBreaks(marker).length<1000 ? "attribution" : "unparsed");
   }
-  if (removed) for (const prefix of root.querySelectorAll('[data-skim-quote="attribution"],.moz-cite-prefix,.gmail_attr')) prefix.remove();
-  const outlook=root.querySelector('[data-skim-quote="outlook"],#divRplyFwdMsg');
-  if (outlook) {
-    let node: ChildNode|null=outlook;
-    while (node) {const next:ChildNode|null=node.nextSibling;node.remove();node=next;}
-    removed=true;
+  const candidates=[...root.querySelectorAll(`${historySelector},blockquote`)]
+    .filter(element=>element.matches(historySelector) || precedingAttribution(element));
+  const quoted=new Set(candidates);
+  const outer=candidates.filter(element=>{
+    for (let parent=element.parentElement;parent;parent=parent.parentElement) if (quoted.has(parent)) return false;
+    return true;
+  });
+  return outer.map(quote=>{
+    const prefix=precedingAttribution(quote);
+    let attribution=prefix ? textWithBreaks(prefix) : "";
+    prefix?.remove();
+    const inside=[...quote.querySelectorAll(attributionSelector)]
+      .find(element=>element.closest(`blockquote,${historySelector}`) === quote);
+    if (inside) {attribution ||= textWithBreaks(inside);inside.remove();}
+    const content=document.createDocumentFragment();content.append(...quote.childNodes);quote.remove();
+    // Gmail often wraps its whole quoted message in one extra blockquote.
+    const children=[...content.children].filter(element=>element.tagName!=="STYLE" && element.tagName!=="BR");
+    if (children.length===1 && children[0].tagName==="BLOCKQUOTE") {
+      const outside=content.cloneNode(true) as DocumentFragment;outside.querySelector("blockquote")?.remove();
+      if (!hasContent(outside)) children[0].replaceWith(...children[0].childNodes);
+    }
+    return {content,attribution};
+  });
+}
+
+function plainHistory(html: string, plain: Element): {html:string;hasQuoted:boolean;history:QuotedMessage[]} {
+  const history:QuotedMessage[]=[];
+  let lines=(plain.textContent ?? "").split("\n"), attribution="", own="";
+  while (lines.length) {
+    const boundary=lines.findIndex(line=>/^On .+wrote:\s*$/i.test(line.trim()) || /^-----Original Message-----\s*$/i.test(line.trim()));
+    const body=(boundary<0 ? lines : lines.slice(0,boundary)).join("\n").trimEnd();
+    if (!history.length && !attribution) {
+      if (boundary<=0) return {html,hasQuoted:false,history:[]};
+      own=body;
+    } else if (body.trim()) {
+      const pre=document.createElement("pre");pre.className="skim-plain";pre.textContent=body;
+      history.push({html:pre.outerHTML,...header(attribution)});
+    }
+    if (boundary<0) break;
+    attribution=lines[boundary].trim();lines=lines.slice(boundary+1);
+    const nonempty=lines.filter(line=>line.trim());
+    if (nonempty.length && nonempty.every(line=>/^\s*>/.test(line))) lines=lines.map(line=>line.replace(/^\s*> ?/,""));
   }
-  const plain=root.querySelector('pre.skim-plain');
-  if (plain) {
-    const lines=(plain.textContent ?? "").split("\n");
-    const boundary=lines.findIndex(line => /^On .+wrote:\s*$/.test(line.trim()) || /^-----Original Message-----\s*$/.test(line.trim()));
-    if (boundary>0) {plain.textContent=lines.slice(0,boundary).join("\n").trimEnd();removed=true;}
+  if (!history.length) return {html,hasQuoted:false,history:[]};
+  const pre=document.createElement("pre");pre.className="skim-plain";pre.textContent=own;
+  return {html:pre.outerHTML,hasQuoted:true,history};
+}
+
+/** Input is sanitized. Each history card contains only text actually quoted in this email. */
+export function withoutQuotedHistory(html: string): {html:string;hasQuoted:boolean;history:QuotedMessage[]} {
+  const template=document.createElement("template");template.innerHTML=html;
+  const root=template.content, plain=root.querySelector("pre.skim-plain");
+  if (plain && root.childElementCount===1 && root.firstElementChild===plain) return plainHistory(html,plain);
+  const styles=[...root.querySelectorAll("style")].map(style=>style.outerHTML).join("");
+  const queue=extract(root);
+  if (!queue.length || !hasContent(root)) return {html,hasQuoted:false,history:[]};
+  const own=serialize(root), history:QuotedMessage[]=[];
+  while (queue.length) {
+    const quoted=queue.shift()!, nested=extract(quoted.content);
+    if (hasContent(quoted.content)) history.push({html:styles+serialize(quoted.content),...header(quoted.attribution)});
+    else if (nested.length && !nested[0].attribution) nested[0].attribution=quoted.attribution;
+    queue.unshift(...nested);
   }
-  // Quote-only mail has no separate reply to show. Keep its full content visible.
-  const own=root.cloneNode(true) as DocumentFragment;
-  for (const style of own.querySelectorAll('style')) style.remove();
-  if (!removed || !(own.textContent ?? "").trim()) return {html,hasQuoted:false};
-  return {html:template.innerHTML,hasQuoted:true};
+  return history.length ? {html:own,hasQuoted:true,history} : {html,hasQuoted:false,history:[]};
 }

@@ -39,6 +39,27 @@ try {
   catch(error) { console.error("Startup errors:",errors);console.error((await page.locator("body").innerText()).slice(0,1000));throw error; }
   assert.equal(await page.locator("nav.sidebar").count(), 0, "Home must be separate from inbox navigation");
   await page.getByRole("button", {name:"Search mail",exact:true}).waitFor();
+  const homeControls=[page.getByRole("button",{name:"Check Inbox",exact:true}),page.getByRole("button",{name:"Search mail",exact:true}),page.getByRole("button",{name:"Compose",exact:true}),page.locator(".mail-preview").first()];
+  for (const control of homeControls) {
+    await control.hover({position:{x:8,y:8}});
+    await page.waitForFunction(el=>el.getAnimations({subtree:true}).some(animation=>animation.playState==="running"),await control.elementHandle());
+    const origin=await control.evaluate(el=>({x:parseFloat(el.style.getPropertyValue("--ripple-x")),y:parseFloat(el.style.getPropertyValue("--ripple-y"))}));
+    assert(origin.x>=0 && origin.x<20 && origin.y>=0 && origin.y<20,"Hover ripple starts near the pointer entry");
+    await page.waitForFunction(el=>el.getAnimations({subtree:true}).every(animation=>animation.playState!=="running"),await control.elementHandle());
+    assert.equal(await control.evaluate(el=>getComputedStyle(el,"::after").opacity),"0","The ripple settles while the pointer stays over the control");
+  }
+  assert.equal(await page.locator(".mail-preview").first().evaluate(el=>getComputedStyle(el).transform),"none","Hover does not move or indent unread rows");
+  await page.emulateMedia({reducedMotion:"reduce"});
+  for (const control of homeControls) {
+    await control.hover();
+    assert.equal(await control.evaluate(el=>el.getAnimations({subtree:true}).filter(animation=>animation.playState==="running").length),0,"Reduced motion disables the ripple and hover movement");
+    assert.equal(await control.evaluate(el=>getComputedStyle(el).transform),"none");
+    await control.focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await control.evaluate(el=>getComputedStyle(el).outlineStyle),"solid","Keyboard focus stays visible");
+  }
+  await page.emulateMedia({reducedMotion:"no-preference"});
   await page.getByRole("button", {name:"Compose",exact:true}).click();
   await page.locator(".compose-dock").waitFor();
   await page.getByRole("button",{name:"Close and save draft",exact:true}).click();
@@ -256,14 +277,14 @@ try {
       return el && el.scrollHeight>el.clientHeight+600;
     });
     const scroll=page.locator(".reading-host .scroll");
-    const iframe=page.locator(".reading-host iframe");
+    const iframe=page.locator(".reading-host iframe").first();
     await iframe.waitFor();
     const box=await iframe.boundingBox();
     await page.mouse.move(box.x+Math.min(box.width/2,200),Math.max(150,Math.min(box.y+70,800)));
     await page.mouse.wheel(0,650);
     await page.waitForFunction(()=>document.querySelector(".reading-host .scroll").scrollTop>200);
     assert(await scroll.evaluate(el=>el.getBoundingClientRect().bottom<=window.innerHeight),"Reading scroller must remain inside the window");
-    assert(await page.locator(".reading-host footer.actions").isVisible(),"Reply actions remain reachable");
+    assert(await page.locator(".reading-host footer.card-actions").last().isVisible(),"Reply actions remain reachable");
     await page.mouse.click(box.x+Math.min(box.width/2,200),Math.max(150,Math.min(box.y+70,800)));
     await page.keyboard.press("Home");
     await page.waitForFunction(()=>document.querySelector(".reading-host .scroll").scrollTop===0);
@@ -597,6 +618,21 @@ try {
   await homePage.getByText("No New Emails",{exact:true}).waitFor();
   await homePage.screenshot({path:new URL("../demo/output/home-no-new.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
   await homePage.close();
+  const scenePage=await browser.newPage({viewport:{width:1280,height:900},timezoneId:"America/Chicago"});
+  scenePage.on("pageerror",error=>errors.push(error.message));
+  await scenePage.clock.setFixedTime(new Date("2026-11-06T06:35:00-06:00"));
+  await scenePage.goto("http://localhost:1421");
+  for(const [hour,id,image,greeting] of [[6,"dawn","home-nature.png","Good morning."],[9,"morning","home-morning.png","Good morning."],[15,"afternoon","home-afternoon.png","Good afternoon."],[19,"evening","home-evening.png","Good evening."],[22,"night","home-night.png","Good night."]]) {
+    await scenePage.clock.setFixedTime(new Date(`2026-11-06T${String(hour).padStart(2,"0")}:35:00-06:00`));
+    await scenePage.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    await scenePage.waitForFunction(id=>document.querySelector(".home")?.getAttribute("data-scene")===id,id);
+    await scenePage.getByRole("heading",{name:greeting,exact:true}).waitFor();
+    assert((await scenePage.locator(".home").evaluate(el=>getComputedStyle(el).backgroundImage)).includes(image));
+    const response=await scenePage.request.get(`http://localhost:1421/${image}`);
+    assert.equal(response.status(),200,`${id} background is bundled and available offline`);
+  }
+  await scenePage.screenshot({path:new URL("../demo/output/home-night-live.png",import.meta.url).pathname.replace(/^\/(\w:)/,"$1"),fullPage:true});
+  await scenePage.close();
   assert.deepEqual(errors, []);
   console.log("Inbox UI passed: unread alignment, mixed date sections, section/group Done, reader Back/Done and E, Home, sidebar, sender drill-down, Show Done, sweep batching, failure recovery, Priority and unified Sent.");
 } finally {

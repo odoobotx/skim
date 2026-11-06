@@ -4,6 +4,7 @@
   import { mail } from "../lib/stores/mail.svelte";
   import { ui } from "../lib/stores/ui.svelte";
   import { palette } from "../lib/stores/palette.svelte";
+  import { homeScene } from "../lib/home-scene";
   import type { ThreadRow } from "../lib/types";
   let now = $state(new Date());
   let composeError = $state(false);
@@ -13,10 +14,20 @@
   let newUnread = $state(0);
   let recentLoaded = $state(false);
   onMount(() => {
-    const timer = setInterval(() => now = new Date(), 60000);
-    return () => clearInterval(timer);
+    const refreshClock = () => now = new Date();
+    const timer = setInterval(refreshClock, 60000);
+    document.addEventListener("visibilitychange", refreshClock);
+    window.addEventListener("focus", refreshClock);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshClock);
+      window.removeEventListener("focus", refreshClock);
+    };
   });
-  const greeting = $derived(now.getHours() < 12 ? "Good morning." : now.getHours() < 18 ? "Good afternoon." : "Good evening.");
+  const scene = $derived(homeScene(now));
+  const clockParts = $derived(new Intl.DateTimeFormat(undefined, {hour:"numeric",minute:"2-digit"}).formatToParts(now));
+  const clockTime = $derived(clockParts.filter(part => part.type !== "dayPeriod").map(part => part.value).join("").trim());
+  const clockPeriod = $derived(clockParts.find(part => part.type === "dayPeriod")?.value);
   const inbox = $derived(mail.folders.find(folder => folder.role === "inbox"));
   $effect(() => {
     void mail.threads;
@@ -59,33 +70,40 @@
       ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
       : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
+  function positionRipple(event: PointerEvent) {
+    const button = event.currentTarget as HTMLButtonElement;
+    const rect = button.getBoundingClientRect();
+    button.style.setProperty("--ripple-x", `${event.clientX - rect.left}px`);
+    button.style.setProperty("--ripple-y", `${event.clientY - rect.top}px`);
+    button.style.setProperty("--ripple-size", `${Math.hypot(rect.width, rect.height) * 2}px`);
+  }
 </script>
 
-<section class="home" aria-label="Home">
+<section class="home" class:night={scene.id === "night"} data-scene={scene.id} style:--home-image={`url("${scene.image}")`} aria-label="Home">
   <div class="topline">
-    <div><time>{now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</time>
-      <div class="clock">{now.toLocaleTimeString(undefined, {hour: "numeric", minute: "2-digit"})}</div></div>
+    <div><time class="date" datetime={now.toISOString()}>{now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</time>
+      <time class="clock" datetime={now.toISOString()}><span>{clockTime}</span>{#if clockPeriod}<span class="period">{clockPeriod}</span>{/if}</time></div>
     <div class="tools">
-      <button onclick={() => palette.show()} aria-label="Search mail">
-        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.8"/><path d="m13 13 4.5 4.5"/></svg><span>Search</span>
+      <button class="glass" onpointerenter={positionRipple} onclick={() => palette.show()} aria-label="Search mail" title="Search mail · Ctrl+K">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.8"/><path d="m13 13 4.5 4.5"/></svg>
       </button>
-      <button onclick={() => void compose()} disabled={composing} aria-label="Compose">
-        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m13 3 4 4-9 9-5 1 1-5zM11 5l4 4"/></svg><span>Compose</span>
+      <button class="glass" onpointerenter={positionRipple} onclick={() => void compose()} disabled={composing} aria-label="Compose" title="Compose · Ctrl+N">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m13 3 4 4-9 9-5 1 1-5zM11 5l4 4"/></svg>
       </button>
     </div>
   </div>
   <div class="welcome">
-    <h1>{greeting}</h1>
-    <button class="enter" onclick={() => void enter()}>Check Inbox</button>
+    <h1>{scene.greeting}</h1>
+    <button class="enter glass" onpointerenter={positionRipple} onclick={() => void enter()}>Check Inbox</button>
     <p class="status">{#if mail.loadFailed || recentFailed}Mail couldn't load. Open Inbox to retry.
       {:else if !recentLoaded}Checking for new mail…
       {:else if newUnread > 0}{newUnread.toLocaleString()} new unread {newUnread === 1 ? "email" : "emails"}
       {:else}No New Emails{/if}</p>
     {#if composeError}<p class="error" role="alert">Couldn't open the composer. Please try again.</p>{/if}
     {#if recent.length}
-      <div class="latest"><h2>New Unread Emails</h2><ul>
+      <div class="latest"><h2>New Unread Emails</h2><ul class="glass-panel">
         {#each recent as row (row.messageId ?? row.id)}
-          <li><button class="mail-preview" onclick={() => void open(row)}>
+          <li><button class="mail-preview glass" onpointerenter={positionRipple} onclick={() => void open(row)}>
             <span class="sender">{row.fromName || row.fromAddr}</span>
             <span class="subject">{row.subject || "No subject"}</span><time>{time(row.date)}</time>
           </button></li>
@@ -96,25 +114,49 @@
 </section>
 
 <style>
-  .home { position:relative; isolation:isolate; flex:1; overflow:auto; display:flex; flex-direction:column; padding:72px 44px 32px; color:#fff; background:#17342f; background-image:linear-gradient(180deg,#061b1940,#06151170),url("/home-nature.png"); background-size:cover; background-position:center; }
+  .home { position:relative; isolation:isolate; flex:1; overflow:auto; display:flex; flex-direction:column; padding:54px 64px 36px; color:#fff; background:#17342f; background-image:linear-gradient(180deg,#10241c26 0%,#071a2252 55%,#0818207a 100%),var(--home-image); background-size:cover; background-position:right center; }
+  .home.night { background-image:linear-gradient(180deg,#06101c14,#06101c36),var(--home-image); }
   .topline { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
-  .topline time { font-size:12px; color:#ffffffe0; } .clock { margin-top:8px; font-size:30px; font-weight:350; letter-spacing:-1px; }
+  .date { font-size:14px; font-weight:450; color:#ffffffe0; } .clock { display:flex; align-items:baseline; gap:9px; margin-top:10px; font-size:40px; line-height:1.12; font-weight:320; letter-spacing:-1.4px; font-variant-numeric:tabular-nums; } .period { font-size:17px; font-weight:400; letter-spacing:0; color:#ffffffd9; }
   .tools { display:flex; gap:10px; }
-  .tools button { display:flex; gap:9px; align-items:center; padding:11px 14px; border:1px solid #ffffff55; border-radius:26px; color:#fff; font-size:12px; background:#071b1920; }
-  .tools button:hover { background:#ffffff20; } .tools button:disabled { opacity:.5; }
-  .welcome { width:min(760px,100%); margin:auto; padding:64px 0 88px; text-align:center; }
-  h1 { margin:0 0 28px; font-size:clamp(36px,5vw,62px); font-weight:550; letter-spacing:-1.8px; line-height:1.12; text-shadow:0 2px 24px #0003; }
-  .enter { display:inline-flex; gap:24px; align-items:center; padding:13px 24px; border-radius:30px; background:#f7faf7; color:#153b33; font-weight:600; font-size:13px; box-shadow:0 4px 22px #0001; }
-  .enter:hover { background:#fff; } .status { margin:16px 0 0; font-size:12px; color:#ffffffe0; }
-  .latest { margin:32px auto 0; text-align:left; width:100%; }
-  h2 { font-size:11px; font-weight:500; color:#ffffffe0; margin:0 12px 10px; }
-  ul { padding:0; margin:0; list-style:none; display:grid; gap:4px; }
-  .mail-preview { display:grid; grid-template-columns:minmax(100px,25%) minmax(0,1fr) 68px; gap:16px; align-items:center; width:100%; padding:12px 16px; border-radius:9px; background:#0b242ab8; border:1px solid #ffffff18; color:#fff; text-align:left; font-size:12px; }
-  .mail-preview:hover { background:#193e42e8; border-color:#ffffff55; }
+  .glass,.glass-panel { color:#fff; background:linear-gradient(165deg,#ffffff22 0%,#ffffff05 54%,#ffffff0f 100%),#102b3338; border:1px solid #ffffff5c; box-shadow:inset 0 1px 0 #ffffff55,inset 0 -1px 0 #ffffff0d,0 5px 20px #061b1f1f; -webkit-backdrop-filter:blur(12px) saturate(1.08); backdrop-filter:blur(12px) saturate(1.08); }
+  .glass { position:relative; isolation:isolate; overflow:hidden; text-shadow:0 1px 5px #06191f55; transition:background-color 140ms,border-color 140ms,box-shadow 140ms,transform 140ms; }
+  .glass::before,.glass::after { content:""; position:absolute; pointer-events:none; z-index:-1; opacity:0; }
+  .glass::before { inset:0; background:linear-gradient(110deg,transparent 25%,#ffffff12 45%,#ffffff24 50%,#ffffff08 56%,transparent 75%); transform:translateX(-115%); }
+  .glass::after { left:var(--ripple-x,50%); top:var(--ripple-y,50%); width:var(--ripple-size,240px); height:var(--ripple-size,240px); margin-left:calc(var(--ripple-size,240px) / -2); margin-top:calc(var(--ripple-size,240px) / -2); border-radius:50%; background:radial-gradient(circle,transparent 43%,#ffffff08 50%,#ffffff38 56%,#ffffff0a 61%,transparent 67%); transform:scale(.04); }
+  .tools button { display:grid; place-items:center; width:42px; height:42px; padding:0; border-radius:50%; }
+  .tools button:disabled { opacity:.5; }
+  .enter:active:not(:disabled),.tools button:active:not(:disabled) { transform:scale(.98); }
+  @media(hover:hover) and (pointer:fine) {
+    .glass:hover:not(:disabled) { background-color:#173e484a; border-color:#ffffff80; }
+    .glass:hover:not(:disabled)::before { animation:glass-sweep 620ms ease-out; }
+    .glass:hover:not(:disabled)::after { animation:glass-ripple 560ms cubic-bezier(.16,.7,.3,1); }
+    .enter:hover,.tools button:hover:not(:disabled) { transform:translateY(-1px); }
+    .enter:active,.tools button:active:not(:disabled) { transform:scale(.98); }
+  }
+  @keyframes glass-sweep { 0% { opacity:0; transform:translateX(-115%); } 25% { opacity:.8; } 100% { opacity:0; transform:translateX(115%); } }
+  @keyframes glass-ripple { 0% { opacity:0; transform:scale(.04); } 18% { opacity:.65; } 100% { opacity:0; transform:scale(1); } }
+  .welcome { width:min(820px,100%); margin:auto; padding:48px 0 68px; text-align:center; }
+  h1 { margin:0 0 26px; font-size:clamp(36px,5vw,52px); font-weight:510; letter-spacing:-1.65px; line-height:1.12; text-shadow:0 2px 24px #10251a20; }
+  .enter { display:inline-flex; align-items:center; min-height:46px; padding:13px 25px; border-radius:28px; font-weight:600; font-size:13px; }
+  .status { margin:16px 0 0; font-size:12px; color:#ffffffe0; }
+  .latest { margin:40px auto 0; text-align:left; width:100%; }
+  h2 { font-size:12px; font-weight:500; color:#ffffffe0; margin:0 16px 12px; }
+  ul { padding:0; margin:0; list-style:none; border-radius:14px; overflow:hidden; }
+  li+li { border-top:1px solid #ffffff14; }
+  .mail-preview { display:grid; grid-template-columns:minmax(100px,22%) minmax(0,1fr) 60px; gap:18px; align-items:center; width:100%; min-height:53px; padding:14px 20px; border:0; border-radius:0; background:transparent; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none; color:#fff; text-align:left; font-size:12.5px; }
   .sender,.subject { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .sender { font-weight:600; } .subject { color:#ffffffe8; } .mail-preview time { font-size:10px; color:#ffffffca; text-align:right; }
   .home :focus-visible { outline:2px solid #fff; outline-offset:3px; }
+  .mail-preview:focus-visible { outline-offset:-3px; }
   .error { margin:12px; font-size:12px; }
-  @media(max-width:650px) { .home { padding:64px 24px 24px; } .tools button span { display:none; } .tools button { padding:12px; } .mail-preview { grid-template-columns:minmax(80px,30%) minmax(0,1fr); gap:12px; } .mail-preview time { display:none; } }
+  @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) { .glass,.glass-panel { background:#163a43df; } .mail-preview { background:transparent; } }
+  @media(prefers-reduced-transparency:reduce) { .glass,.glass-panel { background:#163a43; -webkit-backdrop-filter:none; backdrop-filter:none; } .mail-preview { background:transparent; } }
+  @media(prefers-reduced-motion:reduce) {
+    .glass { transition:none; }
+    .home button.glass:hover,.home button.glass:active { transform:none; }
+    .glass:hover:not(:disabled)::before,.glass:hover:not(:disabled)::after { animation:none; opacity:0; }
+  }
+  @media(max-width:650px) { .home { padding:40px 26px 24px; } .date { font-size:12px; } .clock { font-size:36px; } .tools { gap:8px; } .tools button { width:38px; height:38px; } .mail-preview { grid-template-columns:minmax(80px,30%) minmax(0,1fr); gap:12px; padding:14px; } .mail-preview time { display:none; } }
   @media(max-height:700px) { .welcome { padding:30px 0; } h1 { font-size:40px; margin-bottom:20px; } .latest { margin-top:22px; } }
 </style>

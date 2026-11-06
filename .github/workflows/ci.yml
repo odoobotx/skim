@@ -1,71 +1,72 @@
-name: CI
+name: Checks and Windows installer
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main, feature/task-inbox]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    runs-on: windows-latest
+  frontend:
+    name: Frontend checks
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Install headless test browser
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:inbox-ui
+      - run: npm run test:compose-ui
+      - run: npm run test:conversation-ui
+      - run: npm run build
 
+  windows-installer:
+    name: Windows validation and installer
+    if: github.event_name == 'workflow_dispatch'
+    needs: frontend
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Typecheck frontend
-        run: npm run check
-
-      - name: Inbox grouping tests
-        run: npm test
-
-      - name: Install headless test browser
-        run: npx playwright install chromium
-
-      - name: Inbox interaction tests (synthetic mail)
-        run: npm run test:inbox-ui
-
-      - name: Compose interaction tests (synthetic mail)
-        run: npm run test:compose-ui
-
-      - name: Build frontend
-        run: npm run build
-
+      - run: npm ci
+      - run: npx playwright install chromium
       - name: Rustfmt
         run: cargo fmt --check
         working-directory: src-tauri
-
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
         working-directory: src-tauri
-
-      - name: Tests
+      - name: Native tests
         run: cargo test
         working-directory: src-tauri
-
-      - name: Build offline email rendering helper
+      - name: Build offline rendering helper
         run: cargo build --example render_email
         working-directory: src-tauri
-
-      - name: Email rendering tests (synthetic mail)
+      - name: Email rendering tests
         run: npm run test:rendering
-
       - name: Save offline rendering helper
         if: always()
         uses: actions/upload-artifact@v4
@@ -73,13 +74,11 @@ jobs:
           name: rendering-tool
           path: src-tauri/target/debug/examples/render_email.exe
           if-no-files-found: ignore
-
-      - name: Build Windows preview installer
+      - name: Build Windows installer
         run: npm run tauri -- build --bundles nsis
-
-      - name: Save Windows preview installer
+      - name: Save Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: skim-tasks-windows-preview
+          name: skim-windows-installer
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error

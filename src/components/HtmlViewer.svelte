@@ -8,6 +8,7 @@
   import { t } from "../lib/i18n/index.svelte";
   import { copyText } from "../lib/clipboard";
   import type { LinkFlag } from "../lib/types";
+  import HistoryBody from "./HtmlViewer.svelte";
 
   let {
     html,
@@ -15,6 +16,7 @@
     onHoverUrl,
     appearance = "theme",
     trimQuotes = false,
+    onInteract,
   }: {
     html: string;
     /** Per-link phishing verdicts from the backend, keyed by raw href. */
@@ -23,6 +25,7 @@
     onHoverUrl?: (url: string | null) => void;
     appearance?: "theme" | "original";
     trimQuotes?: boolean;
+    onInteract?: () => void;
   } = $props();
 
   let iframe: HTMLIFrameElement | undefined = $state();
@@ -65,18 +68,15 @@
     if (!selectionMenu) return;
     copyButton?.focus();
     const dismiss=() => selectionMenu=null;
-    const doc=iframe?.contentDocument;
     window.addEventListener("pointerdown",dismiss);
     window.addEventListener("scroll",dismiss,true);
     window.addEventListener("blur",dismiss);
-    doc?.addEventListener("pointerdown",dismiss);
-    doc?.addEventListener("scroll",dismiss,true);
+    window.addEventListener("skim:message-interaction",dismiss);
     return () => {
       window.removeEventListener("pointerdown",dismiss);
       window.removeEventListener("scroll",dismiss,true);
       window.removeEventListener("blur",dismiss);
-      doc?.removeEventListener("pointerdown",dismiss);
-      doc?.removeEventListener("scroll",dismiss,true);
+      window.removeEventListener("skim:message-interaction",dismiss);
     };
   });
 
@@ -100,10 +100,12 @@
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("pointerdown", dismiss);
     window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("skim:message-interaction", dismiss);
     return () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("pointerdown", dismiss);
       window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("skim:message-interaction", dismiss);
     };
   });
 
@@ -161,14 +163,19 @@
   });
   let revealQuotes = $state(false);
   $effect(() => {void html;revealQuotes=false;});
-  const reply=$derived(trimQuotes ? withoutQuotedHistory(html) : {html,hasQuoted:false});
+  const reply=$derived(trimQuotes ? withoutQuotedHistory(html) : {html,hasQuoted:false,history:[]});
   const srcdoc = $derived(
-    buildEmailDocument(revealQuotes ? html : reply.html, ui.effective === "dark" && !original, original, surface),
+    buildEmailDocument(reply.html, ui.effective === "dark" && !original, original, surface),
   );
   $effect(() => {void srcdoc;selectionMenu=null;});
 
   function setupDoc(doc: Document) {
     observedDoc = doc;
+    const interact = () => {onInteract?.();window.dispatchEvent(new Event("skim:message-interaction"));};
+    doc.addEventListener("pointerdown",interact);
+    doc.addEventListener("focusin",interact);
+    doc.addEventListener("wheel",interact,{passive:true});
+    doc.addEventListener("scroll",interact,true);
     const measure = () => {
       // Fonts and images keep their callbacks alive across a message switch,
       // so one can fire for a document that has already been replaced. Its
@@ -256,6 +263,7 @@
     // Keep native link actions from bypassing the reader's link-safety gate.
     doc.addEventListener("contextmenu", (e) => {
       e.preventDefault();
+      interact();
       gate=null;
       const selection=doc.getSelection(), text=selection?.toString();
       if (!text) {selectionMenu=null;return;}
@@ -304,6 +312,7 @@
     // back is what keeps preventDefault working: Q focuses the Ask input
     // during keydown, and the original "q" would otherwise be typed into it.
     doc.addEventListener("keydown", (e) => {
+      interact();
       if (e.isComposing) return;
       const replay = new KeyboardEvent("keydown", {
         key: e.key,
@@ -350,13 +359,30 @@
 <iframe
   bind:this={iframe}
   title={t("a11y.message")}
+  loading="lazy"
   sandbox="allow-same-origin"
   srcdoc={srcdoc}
   onload={onLoad}
   style="height: {height}px"
 ></iframe>
 {#if reply.hasQuoted}
-  <button class="quoted-toggle" aria-expanded={revealQuotes} onclick={() => revealQuotes=!revealQuotes}>{revealQuotes ? "Hide quoted history" : "Show quoted history"}</button>
+  <button class="quoted-toggle" aria-label={revealQuotes ? "Hide quoted history" : "Show quoted history"} title={revealQuotes ? "Hide history" : "History"}
+    aria-expanded={revealQuotes} onclick={() => {onInteract?.();revealQuotes=!revealQuotes;}}>
+    <svg width="19" height="10" viewBox="0 0 19 10" fill="currentColor" aria-hidden="true"><circle cx="3" cy="5" r="1.5"/><circle cx="9.5" cy="5" r="1.5"/><circle cx="16" cy="5" r="1.5"/></svg>
+    {#if revealQuotes}<span>Hide history</span>{/if}
+  </button>
+  {#if revealQuotes}
+    <ol class="quoted-history" aria-label="Quoted history">
+      {#each reply.history as quoted,index (index)}
+        <li class="history-card">
+          <header class="history-meta"><strong title={quoted.attribution}>{quoted.sender || quoted.attribution || "Quoted message"}</strong>
+            <span class="history-badge">History</span>{#if quoted.date}<span class="history-date">{quoted.date}</span>{/if}
+          </header>
+          <div class="history-body"><HistoryBody html={quoted.html} {appearance} {security} {onHoverUrl} {onInteract} /></div>
+        </li>
+      {/each}
+    </ol>
+  {/if}
 {/if}
 
 {#if selectionMenu}
@@ -381,6 +407,7 @@
   <div
     bind:this={gateEl}
     class="gate"
+    use:atWindowRoot
     role="alertdialog"
     aria-label={t("security.link_gate_title", { host: gate.flag.host })}
     tabindex="-1"
@@ -403,8 +430,16 @@
   .selection-menu button:hover, .selection-menu button:focus-visible { background:var(--hover); outline:2px solid var(--accent); outline-offset:-2px; }
   .selection-menu kbd { color:var(--text-faint); font:10px var(--font-mono); }
   .selection-menu p { margin:6px 10px; font-size:11px; color:var(--text-dim); }
-  .quoted-toggle { padding:7px 10px; margin-top:8px; border:1px solid var(--hairline); border-radius:7px; font-size:11px; color:var(--text-dim); }
+  .quoted-toggle { display:inline-flex; align-items:center; gap:7px; padding:3px 6px; margin-top:8px; min-height:20px; border-radius:6px; font-size:11px; color:var(--text-dim); background:var(--hover); }
   .quoted-toggle:hover { background:var(--hover); }
+  .quoted-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  .quoted-history { list-style:none; padding:0; margin:12px 0 0; display:grid; gap:10px; }
+  .history-card { min-width:0; border:1px solid var(--hairline-strong); border-radius:10px; overflow:hidden; background:var(--surface); }
+  .history-meta { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; padding:11px 14px; border-bottom:1px solid var(--hairline); font-size:12px; }
+  .history-meta strong { flex:1; min-width:100px; overflow-wrap:anywhere; font-weight:600; }
+  .history-badge { font-size:9px; color:var(--text-faint); padding:1px 5px; border:1px solid var(--hairline); border-radius:4px; }
+  .history-date { max-width:65%; font-size:10px; color:var(--text-dim); }
+  .history-body { padding:12px 14px; }
   .image-dialog { max-width: 95vw; max-height: 90vh; padding: 16px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; color: #17171b; overflow: auto; }
   .image-dialog::backdrop { background: #0009; }
   .image-dialog img { display: block; max-width: 85vw; max-height: 75vh; object-fit: contain; }
