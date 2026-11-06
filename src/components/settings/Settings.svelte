@@ -107,7 +107,7 @@
   let groupThreads = $state("on");
   let sentCopyModes = $state<Record<string,"auto" | "server" | "client">>({});
   let sentCopySaving = $state(false);
-  let autostart = $state(true);
+  let autostart = $state(false);
   // Which account's disconnect button is in its "confirm?" state.
   let confirmingRemoveId = $state<string | null>(null);
   // Settings-hosted "add another mailbox": swaps the panel body for the
