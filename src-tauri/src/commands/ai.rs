@@ -565,7 +565,7 @@ pub async fn open_ai_window(app: AppHandle, session_id: u64, title: String) -> R
         return Ok(());
     }
     let title = match window_title(title.trim()) {
-        t if t.is_empty() => "Skim AI".to_string(),
+        t if t.is_empty() => "Cove AI".to_string(),
         t => t,
     };
     let open = app

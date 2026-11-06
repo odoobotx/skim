@@ -881,7 +881,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    background: var(--surface);
+    background: color-mix(in srgb, var(--bg) 97%, var(--text));
     min-width: 0;
     min-height: 0;
     overflow: hidden;
@@ -1086,8 +1086,11 @@
   }
 
   .reader-subject { padding:8px 36px 4px; margin:0; }
-  .conversation-card { min-width:0; border:1px solid var(--hairline); border-radius:14px; overflow:hidden; background:var(--surface); }
-  .conversation-card.active { border-color:var(--hairline-strong); }
+  .conversation-card { min-width:0; border:1px solid color-mix(in srgb,var(--text) 14%,transparent); border-radius:14px; overflow:hidden; background:var(--surface); box-shadow:0 2px 4px #192b4510,0 8px 22px #192b4507; }
+  .conversation-card.active { border-color:color-mix(in srgb,var(--accent) 27%,var(--hairline-strong)); }
+  :global(html[data-theme$="dark"]) .pane { background:var(--bg); }
+  :global(html[data-theme$="dark"]) .conversation-card { border-color:color-mix(in srgb,var(--text) 17%,transparent); box-shadow:0 3px 12px #00000024,inset 0 1px 0 #ffffff04; }
+  :global(html[data-theme$="dark"]) .conversation-card.active { border-color:color-mix(in srgb,var(--accent) 27%,var(--hairline-strong)); }
   .conversation-card .message { padding:0 20px 14px; margin:0; border:0; }
   .convo { display:flex; flex-direction:column; gap:16px; margin-top:8px; overflow-anchor:none; }
   .card-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding-top:14px; }

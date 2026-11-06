@@ -436,17 +436,17 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
 
 fn tray_labels(locale: &str) -> (&'static str, &'static str) {
     match locale {
-        "ru" => ("Открыть Skim", "Выход"),
-        "de" => ("Skim öffnen", "Beenden"),
-        "fr" => ("Ouvrir Skim", "Quitter"),
-        "es" => ("Abrir Skim", "Salir"),
-        "it" => ("Apri Skim", "Esci"),
-        "pl" => ("Otwórz Skim", "Zakończ"),
-        "sr" => ("Otvori Skim", "Izlaz"),
-        "zh" => ("打开 Skim", "退出"),
-        "ja" => ("Skim を開く", "終了"),
-        "ko" => ("Skim 열기", "종료"),
-        _ => ("Open Skim", "Quit"),
+        "ru" => ("Открыть Cove", "Выход"),
+        "de" => ("Cove öffnen", "Beenden"),
+        "fr" => ("Ouvrir Cove", "Quitter"),
+        "es" => ("Abrir Cove", "Salir"),
+        "it" => ("Apri Cove", "Esci"),
+        "pl" => ("Otwórz Cove", "Zakończ"),
+        "sr" => ("Otvori Cove", "Izlaz"),
+        "zh" => ("打开 Cove", "退出"),
+        "ja" => ("Cove を開く", "終了"),
+        "ko" => ("Cove 열기", "종료"),
+        _ => ("Open Cove", "Quit"),
     }
 }
 
@@ -461,7 +461,7 @@ fn setup_tray(app: &tauri::AppHandle, locale: &str) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().expect("bundled icon").clone())
-        .tooltip("Skim")
+        .tooltip("Cove")
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "linux"))
         .on_menu_event(|app, event| match event.id.as_ref() {

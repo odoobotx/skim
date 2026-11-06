@@ -101,12 +101,8 @@
   {#if step === "welcome"}
     <div class="card welcome">
       <div class="wordmark">
-        <svg class="mark" width="22" height="22" viewBox="0 0 96 96" aria-hidden="true">
-          <rect width="96" height="96" rx="22" fill="#eadfc2" />
-          <rect x="25" y="39" width="46" height="8.5" rx="4.25" fill="#0d0d10" />
-          <rect x="25" y="55" width="29" height="8.5" rx="4.25" fill="#0d0d10" fill-opacity="0.55" />
-        </svg>
-        Skim
+        <img class="mark" src="/cove-icon.svg" width="28" height="28" alt="" />
+        Cove
       </div>
       <h1>
         {t("onb.tagline_1")}<br />

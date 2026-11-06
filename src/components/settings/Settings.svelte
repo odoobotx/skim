@@ -12,12 +12,13 @@
   import { ui } from "../../lib/stores/ui.svelte";
   import type { Account, Lightness, Temperature } from "../../lib/types";
   import ConnectForm from "../onboarding/ConnectForm.svelte";
+  import HomeBackgrounds from "./HomeBackgrounds.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 
   // Each matrix cell previews a *different* theme than the active one, so the
   // colors can't come from CSS variables — they're literals mirroring tokens.css
-  // (and the Skim Theme Matrix design mock).
+  // (and the Cove Theme Matrix design mock).
   const THEME_PREVIEWS: Record<
     string,
     {
@@ -604,6 +605,14 @@
       </button>
     </header>
 
+    {#if !addingAccount}
+      <nav class="sections" aria-label="Settings sections">
+        {#each [["accounts", "Accounts"], ["appearance", "Appearance"], ["home", "Home"], ["general", "General"], ["ai", "AI"]] as [id, label]}
+          <button onclick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: "start" })}>{label}</button>
+        {/each}
+      </nav>
+    {/if}
+
     <div class="body">
       {#if addingAccount}
       <section class="add-account">
@@ -615,7 +624,7 @@
       </section>
       {:else}
       {#if mail.accounts.length > 0}
-        <section>
+        <section id="settings-accounts">
           <div class="microlabel">{t("settings.account")}</div>
           {#if mail.accounts.length > 1}{@render readingLayout("*", "All inboxes reading layout")}{/if}
           {#each mail.accounts as account (account.id)}
@@ -708,22 +717,7 @@
         </section>
       {/if}
 
-      <section>
-        <div class="microlabel">{t("settings.language")}</div>
-        <div class="chips">
-          {#each LOCALES as l (l.code)}
-            <button
-              class="chip"
-              class:active={getLocale() === l.code}
-              onclick={() => chooseLocale(l.code)}
-            >
-              {l.label}
-            </button>
-          {/each}
-        </div>
-      </section>
-
-      <section>
+      <section id="settings-appearance">
         <div class="microlabel">{t("settings.theme")}</div>
         <div class="theme-matrix">
           <!-- header row: temperature axis -->
@@ -775,6 +769,17 @@
         </div>
       </section>
 
+      <section id="settings-home"><HomeBackgrounds /></section>
+
+      <section id="settings-general">
+        <div class="microlabel">{t("settings.language")}</div>
+        <div class="chips">
+          {#each LOCALES as l (l.code)}
+            <button class="chip" class:active={getLocale() === l.code} onclick={() => chooseLocale(l.code)}>{l.label}</button>
+          {/each}
+        </div>
+      </section>
+
       <section class="toggles">
         {@render toggleRow(t("settings.autostart"), autostart, () => setAutostart(!autostart))}
         {@render toggleRow(t("settings.notifications"), notifications === "on", () =>
@@ -807,7 +812,7 @@
         </div>
       </section>
 
-      <section class="ai-section">
+      <section class="ai-section" id="settings-ai">
         <div class="microlabel ai-label">✦ {t("settings.ai")}</div>
 
         <div class="microlabel model-label">{t("settings.ai_provider")}</div>
@@ -1095,9 +1100,9 @@
       </section>
 
       <div class="about microlabel">
-        Skim{appVersion ? ` v${appVersion}` : ""} · {t("onb.footer")} · MIT ·
+        Cove{appVersion ? ` v${appVersion}` : ""} · {t("onb.footer")} · MIT ·
         <button class="gh-link" onclick={() => openUrl("https://github.com/nikserg/skim")}>
-          GitHub
+          Based on Skim
         </button>
       </div>
       {/if}
@@ -1113,13 +1118,13 @@
     display: flex;
     justify-content: center;
     align-items: flex-start;
-    padding-top: 9vh;
+    padding-top: 6vh;
     z-index: 100;
   }
   .panel {
-    width: 560px;
+    width: 760px;
     max-width: calc(100vw - 48px);
-    max-height: 78vh;
+    max-height: 86vh;
     background: var(--surface-raised);
     border: 1px solid var(--hairline-strong);
     border-radius: var(--radius-l);
@@ -1154,7 +1159,7 @@
 
   .body {
     overflow-y: auto;
-    padding: 0 20px 20px;
+    padding: 20px 24px 24px;
     display: flex;
     flex-direction: column;
     gap: 22px;
@@ -1163,7 +1168,13 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    scroll-margin-top: 4px;
   }
+  .sections { display:flex; gap:5px; flex-shrink:0; padding:0 20px 14px; border-bottom:1px solid var(--hairline); }
+  .sections button { padding:7px 12px; font-size:12px; color:var(--text-dim); border-radius:7px; }
+  .sections button:hover { background:var(--hover); color:var(--text); }
+  .sections button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  @media(max-width:550px) { .panel { max-width:calc(100vw - 24px); } .body { padding:16px; } .sections { padding:0 12px 12px; gap:0; } .sections button { flex:1; padding:7px 5px; font-size:11px; } }
 
   .row {
     display: flex;

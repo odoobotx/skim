@@ -1,0 +1,10 @@
+html[data-embedded-preview] .priority-preview-controls, html[data-embedded-preview] .sidebar, html[data-embedded-preview] .titlebar { display:none; }
+html[data-card-depth="depth"] .reading-host .pane { background:color-mix(in srgb,var(--bg) 97%,var(--text)); }
+html[data-card-depth="depth"][data-theme$="dark"] .reading-host .pane { background:var(--bg); }
+html[data-card-depth="depth"] .conversation-card { background:var(--surface); border-color:color-mix(in srgb,var(--text) 14%,transparent); box-shadow:0 2px 4px #192b4510,0 8px 22px #192b4507; }
+html[data-card-depth="depth"][data-theme$="dark"] .conversation-card { border-color:color-mix(in srgb,var(--text) 17%,transparent); box-shadow:0 3px 12px #00000024,inset 0 1px 0 #ffffff04; }
+html[data-card-depth="depth"] .conversation-card.active { border-color:color-mix(in srgb,var(--accent) 27%,var(--hairline-strong)); }
+
+html[data-card-depth="current"] .reading-host .pane { background:var(--surface); }
+html[data-card-depth="current"] .conversation-card { border-color:var(--hairline); box-shadow:none; }
+html[data-card-depth="current"] .conversation-card.active { border-color:var(--hairline-strong); }

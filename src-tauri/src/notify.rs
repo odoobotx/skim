@@ -65,7 +65,7 @@ pub fn register_aumid() {
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if let Ok((key, _)) = hkcu.create_subkey(format!(r"Software\Classes\AppUserModelId\{AUMID}")) {
-        let _ = key.set_raw_value("DisplayName", &expand_sz("Skim Tasks"));
+        let _ = key.set_raw_value("DisplayName", &expand_sz("Cove"));
         let _ = key.set_raw_value("IconUri", &expand_sz(&icon_path.to_string_lossy()));
     }
 }
@@ -87,7 +87,7 @@ pub fn register_url_scheme() {
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if let Ok((key, _)) = hkcu.create_subkey(format!(r"Software\Classes\{URL_SCHEME}")) {
-        let _ = key.set_value("", &"URL:Skim Tasks Protocol");
+        let _ = key.set_value("", &"URL:Cove Protocol");
         let _ = key.set_value("URL Protocol", &"");
     }
     if let Ok((key, _)) =
@@ -200,7 +200,7 @@ pub async fn notify_new_mail(app: &AppHandle, db: &Db, message_pks: &[i64]) {
     let title = from_name
         .filter(|s| !s.is_empty())
         .or(from_addr)
-        .unwrap_or_else(|| "Skim".into());
+        .unwrap_or_else(|| "Cove".into());
     let mut body = subject.unwrap_or_default();
     if message_pks.len() > 1 {
         body.push_str(&format!("  (+{})", message_pks.len() - 1));

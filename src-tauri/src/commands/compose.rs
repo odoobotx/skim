@@ -724,7 +724,7 @@ pub async fn open_compose_window(app: AppHandle, draft_id: i64) -> Result<()> {
         label,
         tauri::WebviewUrl::App(format!("index.html#/compose/{draft_id}").into()),
     )
-    .title("Skim")
+    .title("Cove")
     .inner_size(720.0, 680.0)
     .min_inner_size(520.0, 420.0)
     .decorations(false)
